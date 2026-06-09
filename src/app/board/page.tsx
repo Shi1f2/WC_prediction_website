@@ -109,6 +109,7 @@ export default async function BoardPage() {
         </p>
       </header>
       <BoardClient
+        userId={user.id}
         allTeams={teams}
         groups={groupArray}
         initialGroupPicks={initialGroupPicks}

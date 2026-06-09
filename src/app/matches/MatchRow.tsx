@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, useTransition, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Flag from "@/components/Flag";
-import { scoreMatch } from "@/lib/matchScore";
+import { POINTS, scoreMatch } from "@/lib/matchScore";
+import { MARKET_BY_ID } from "@/lib/markets";
+import MarketPicks from "./MarketPicks";
 
 type Match = {
   id: number;
@@ -41,6 +44,7 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const OPEN_WINDOW_MS = 36 * 60 * 60 * 1000;
 
 function formatCountdown(ms: number): string {
   const d = Math.floor(ms / DAY_MS);
@@ -69,14 +73,35 @@ function liveMinute(
   return "90'+";
 }
 
-export default function MatchRow({ match }: { match: Match }) {
+export default function MatchRow({
+  match,
+  marketPicks = {},
+  forceOpen = false,
+}: {
+  match: Match;
+  marketPicks?: Record<string, string>;
+  forceOpen?: boolean;
+}) {
+  const router = useRouter();
+
+  // Bet is "submitted" if the user has any saved pick (score or market) from
+  // the server. Once submitted, everything is locked — re-rendering happens
+  // server-side after a successful save via router.refresh().
+  const submittedFromServer =
+    match.pred_a != null || Object.keys(marketPicks).length > 0;
+
   const [a, setA] = useState<string>(
-    match.pred_a == null ? "" : String(match.pred_a)
+    match.pred_a == null ? "" : String(match.pred_a),
   );
   const [b, setB] = useState<string>(
-    match.pred_b == null ? "" : String(match.pred_b)
+    match.pred_b == null ? "" : String(match.pred_b),
   );
-  const [status, setStatus] = useState<"idle" | "saved" | "error">("idle");
+  const [marketsDraft, setMarketsDraft] =
+    useState<Record<string, string>>(marketPicks);
+  const [submitStatus, setSubmitStatus] = useState<{
+    state: "idle" | "saved" | "error";
+    message?: string;
+  }>({ state: submittedFromServer ? "saved" : "idle" });
   const [pending, start] = useTransition();
   const [now, setNow] = useState(() => Date.now());
 
@@ -91,7 +116,7 @@ export default function MatchRow({ match }: { match: Match }) {
   const kickoff = new Date(match.kickoff_at).getTime();
   const msUntil = kickoff - now;
   const locked = msUntil <= 0;
-  const notOpenYet = msUntil > DAY_MS;
+  const notOpenYet = !forceOpen && msUntil > OPEN_WINDOW_MS;
   const isLive = match.status != null && LIVE_STATUSES.has(match.status);
   const isFinal =
     (match.status != null && FINAL_STATUSES.has(match.status)) ||
@@ -100,6 +125,7 @@ export default function MatchRow({ match }: { match: Match }) {
   const hasScore =
     match.actual_score_a != null && match.actual_score_b != null;
   const hasPrediction = match.pred_a != null && match.pred_b != null;
+
   const earnedPoints =
     isFinal && hasPrediction
       ? scoreMatch(
@@ -118,35 +144,90 @@ export default function MatchRow({ match }: { match: Match }) {
           match.actual_score_b!,
         )
       : null;
-  const inputsDisabled = locked || notOpenYet || pending;
+
+  // Read-only when bet is already submitted, kickoff has passed, or window
+  // hasn't opened yet. Locks everything (score inputs + market pills).
+  const isReadOnly = submittedFromServer || locked || notOpenYet;
+  const inputsDisabled = isReadOnly || pending;
 
   const teamA = match.team_a_name ?? match.team_a_label ?? "TBD";
   const teamB = match.team_b_name ?? match.team_b_label ?? "TBD";
 
-  async function save() {
-    setStatus("idle");
+  const scoreFilled = a !== "" && b !== "";
+  const hasDraftBet = scoreFilled || Object.keys(marketsDraft).length > 0;
+
+  // Symmetric +/- stakes for the currently drafted bet — exact score is worth
+  // 10, each market pick is worth its catalog value. Win and loss magnitudes
+  // match, so one number drives both labels.
+  const stakeMagnitude =
+    (scoreFilled ? POINTS.exactScore : 0) +
+    Object.entries(marketsDraft).reduce((sum, [m, p]) => {
+      const opt = MARKET_BY_ID[m]?.options.find((o) => o.value === p);
+      return sum + (opt?.points ?? 0);
+    }, 0);
+
+  function setMarketDraft(market: string, pick: string | null) {
+    setMarketsDraft((p) => {
+      if (pick == null) {
+        const copy = { ...p };
+        delete copy[market];
+        return copy;
+      }
+      const next = { ...p, [market]: pick };
+      // At most one "over" and one "under" across the 3 O/U thresholds —
+      // picking "over 2.5" when "over 1.5" is already selected silently
+      // replaces it (same-direction bets on different thresholds would be
+      // redundant). "Over 1.5 + Under 3.5" remains allowed.
+      const OU = ["ou_15", "ou_25", "ou_35"];
+      if (OU.includes(market) && (pick === "over" || pick === "under")) {
+        for (const other of OU) {
+          if (other !== market && next[other] === pick) delete next[other];
+        }
+      }
+      return next;
+    });
+    if (submitStatus.state === "error")
+      setSubmitStatus({ state: "idle" });
+  }
+
+  async function submitBet() {
+    setSubmitStatus({ state: "idle" });
     start(async () => {
       try {
-        const res = await fetch("/api/predictions/match", {
+        const res = await fetch("/api/predictions/bet", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             match_id: match.id,
-            score_a: Number(a),
-            score_b: Number(b),
+            score: scoreFilled ? { a: Number(a), b: Number(b) } : null,
+            markets: Object.entries(marketsDraft).map(([market, pick]) => ({
+              market,
+              pick,
+            })),
           }),
         });
-        if (!res.ok) throw new Error(await res.text());
-        setStatus("saved");
-      } catch {
-        setStatus("error");
+        if (!res.ok) {
+          const text = await res.text();
+          let msg = "Save failed";
+          try {
+            const j = JSON.parse(text);
+            if (j?.error) msg = j.error;
+          } catch {}
+          throw new Error(msg);
+        }
+        setSubmitStatus({ state: "saved" });
+        // Pull the now-locked state from the server (renders read-only UI).
+        router.refresh();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Save failed";
+        setSubmitStatus({ state: "error", message: msg });
       }
     });
   }
 
   let badge: {
     text: string;
-    tone: "final" | "live" | "locked" | "soon" | "later";
+    tone: "final" | "live" | "locked" | "soon" | "later" | "submitted";
   } | null = null;
   if (isFinal) {
     badge = {
@@ -159,7 +240,12 @@ export default function MatchRow({ match }: { match: Match }) {
   } else if (locked) {
     badge = { text: "Locked", tone: "locked" };
   } else if (notOpenYet) {
-    badge = { text: `Opens in ${formatCountdown(msUntil - DAY_MS)}`, tone: "later" };
+    badge = {
+      text: `Opens in ${formatCountdown(msUntil - OPEN_WINDOW_MS)}`,
+      tone: "later",
+    };
+  } else if (submittedFromServer) {
+    badge = { text: "Bet locked in", tone: "submitted" };
   } else {
     badge = { text: `${formatCountdown(msUntil)} left`, tone: "soon" };
   }
@@ -169,9 +255,11 @@ export default function MatchRow({ match }: { match: Match }) {
       className={`glass-card rounded-xl border p-4 transition-colors ${
         notOpenYet
           ? "border-outline-variant/20 opacity-70"
-          : locked
-            ? "border-outline-variant/30"
-            : "border-secondary/30 hover:border-secondary/60"
+          : submittedFromServer
+            ? "border-primary/30"
+            : locked
+              ? "border-outline-variant/30"
+              : "border-secondary/30 hover:border-secondary/60"
       }`}
     >
       <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wider text-on-surface-variant">
@@ -195,7 +283,9 @@ export default function MatchRow({ match }: { match: Match }) {
                   ? "bg-surface-high text-on-surface-variant"
                   : badge.tone === "soon"
                     ? "bg-secondary/20 text-secondary"
-                    : "bg-white/5 text-on-surface-variant"
+                    : badge.tone === "submitted"
+                      ? "bg-primary/15 text-primary"
+                      : "bg-white/5 text-on-surface-variant"
           }`}
         >
           {badge.tone === "live" && (
@@ -217,7 +307,8 @@ export default function MatchRow({ match }: { match: Match }) {
             value={a}
             disabled={inputsDisabled}
             onChange={(e) => setA(e.target.value)}
-            className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-40"
+            placeholder="–"
+            className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
           />
           <span className="mono text-secondary">–</span>
           <input
@@ -227,7 +318,8 @@ export default function MatchRow({ match }: { match: Match }) {
             value={b}
             disabled={inputsDisabled}
             onChange={(e) => setB(e.target.value)}
-            className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-40"
+            placeholder="–"
+            className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
           />
         </div>
         <div className="flex items-center gap-2 truncate">
@@ -236,20 +328,67 @@ export default function MatchRow({ match }: { match: Match }) {
         </div>
       </div>
       {!locked && !notOpenYet && (
-        <div className="mt-3 flex items-center justify-end gap-3 text-xs">
-          {status === "saved" && (
-            <span className="mono uppercase text-primary">Saved</span>
-          )}
-          {status === "error" && (
-            <span className="mono uppercase text-error">Error</span>
-          )}
-          <button
-            onClick={save}
-            disabled={pending || a === "" || b === ""}
-            className="rounded-full bg-secondary px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110 disabled:opacity-40"
-          >
-            {pending ? "Saving…" : "Save"}
-          </button>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="mono text-[10px] uppercase tracking-wider text-on-surface-variant">
+            Exact score · optional ·{" "}
+            <span className="text-primary/90">+10</span>
+            <span className="opacity-40"> / </span>
+            <span className="text-error/90">−10</span>
+          </span>
+        </div>
+      )}
+      <MarketPicks
+        isFinal={isFinal}
+        actualA={match.actual_score_a}
+        actualB={match.actual_score_b}
+        teamA={teamA}
+        teamB={teamB}
+        picks={isReadOnly ? marketPicks : marketsDraft}
+        onChange={setMarketDraft}
+        readOnly={isReadOnly}
+        hideIfEmpty={notOpenYet}
+      />
+      {!isReadOnly && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="mono flex items-center gap-1.5 text-[10px] uppercase tracking-wider">
+            <span className="text-on-surface-variant">At stake</span>
+            <span
+              className={`rounded-full px-2 py-0.5 ${
+                stakeMagnitude > 0
+                  ? "bg-primary/15 text-primary"
+                  : "bg-surface-high text-on-surface-variant"
+              }`}
+            >
+              +{stakeMagnitude}
+            </span>
+            <span className="text-on-surface-variant opacity-50">/</span>
+            <span
+              className={`rounded-full px-2 py-0.5 ${
+                stakeMagnitude > 0
+                  ? "bg-error/15 text-error"
+                  : "bg-surface-high text-on-surface-variant"
+              }`}
+            >
+              −{stakeMagnitude}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {submitStatus.state === "error" && (
+              <span className="mono uppercase text-error">
+                {submitStatus.message ?? "Error"}
+              </span>
+            )}
+            <span className="mono text-[10px] uppercase tracking-wider text-on-surface-variant">
+              Saving locks all picks
+            </span>
+            <button
+              onClick={submitBet}
+              disabled={pending || !hasDraftBet}
+              className="rounded-full bg-secondary px-5 py-1.5 text-xs font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110 disabled:opacity-40"
+            >
+              {pending ? "Saving…" : "Save bet"}
+            </button>
+          </div>
         </div>
       )}
       {hasScore && (
@@ -269,19 +408,33 @@ export default function MatchRow({ match }: { match: Match }) {
                 className={`mono rounded-full px-2 py-0.5 ${
                   earnedPoints > 0
                     ? "bg-primary/20 text-primary"
-                    : "bg-surface-high text-on-surface-variant"
+                    : earnedPoints < 0
+                      ? "bg-error/20 text-error"
+                      : "bg-surface-high text-on-surface-variant"
                 }`}
               >
                 {earnedPoints > 0
-                  ? `+${earnedPoints} pt${earnedPoints === 1 ? "" : "s"}`
-                  : "0 pts"}
+                  ? `+${earnedPoints} pts`
+                  : earnedPoints < 0
+                    ? `${earnedPoints} pts`
+                    : "0 pts"}
               </span>
             )}
             {provisionalPoints != null && (
-              <span className="mono rounded-full bg-error/20 px-2 py-0.5 text-error">
+              <span
+                className={`mono rounded-full px-2 py-0.5 ${
+                  provisionalPoints > 0
+                    ? "bg-secondary/20 text-secondary"
+                    : provisionalPoints < 0
+                      ? "bg-error/20 text-error"
+                      : "bg-surface-high text-on-surface-variant"
+                }`}
+              >
                 {provisionalPoints > 0
                   ? `+${provisionalPoints} so far`
-                  : "0 so far"}
+                  : provisionalPoints < 0
+                    ? `${provisionalPoints} so far`
+                    : "0 so far"}
               </span>
             )}
           </div>
@@ -307,7 +460,7 @@ export default function MatchRow({ match }: { match: Match }) {
               </>
             ) : (
               <div className="col-span-3 text-center text-xs italic text-on-surface-variant">
-                You didn&apos;t make a prediction for this match.
+                You didn&apos;t place an exact-score bet for this match.
               </div>
             )}
           </div>

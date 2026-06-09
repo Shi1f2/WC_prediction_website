@@ -5,6 +5,7 @@ import MatchRow from "./MatchRow";
 import DemoDay from "./DemoDay";
 import { autoSyncForPage } from "@/lib/autoSync";
 import { cookies } from "next/headers";
+import { FORCE_OPEN_FIRST_MATCH } from "@/lib/featureFlags";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,22 @@ export default async function MatchesPage() {
     ORDER BY m.kickoff_at, m.id
   `;
 
+  const marketRows = await sql<
+    { match_id: number; market: string; pick: string }[]
+  >`
+    SELECT match_id, market, pick
+    FROM match_market_predictions
+    WHERE user_id = ${user.id}
+  `;
+  const marketsByMatch = new Map<number, Record<string, string>>();
+  for (const r of marketRows) {
+    const cur = marketsByMatch.get(r.match_id) ?? {};
+    cur[r.market] = r.pick;
+    marketsByMatch.set(r.match_id, cur);
+  }
+
+  const forcedOpenId = FORCE_OPEN_FIRST_MATCH ? rows[0]?.id ?? null : null;
+
   const byDay = new Map<string, MatchRowDb[]>();
   for (const r of rows) {
     const day = r.kickoff_at.slice(0, 10);
@@ -70,7 +87,7 @@ export default async function MatchesPage() {
           Match <span className="text-secondary">Predictions</span>
         </h1>
         <p className="text-on-background-variant">
-          Match predictions open <b>24 hours</b> before kickoff and lock at kickoff.
+          Match predictions open <b>36 hours</b> before kickoff and lock at kickoff.
           Come back daily to predict the next day&apos;s games.
         </p>
       </header>
@@ -114,7 +131,12 @@ export default async function MatchesPage() {
             </div>
             <div className="space-y-3">
               {list.map((m) => (
-                <MatchRow key={m.id} match={m} />
+                <MatchRow
+                  key={m.id}
+                  match={m}
+                  marketPicks={marketsByMatch.get(m.id) ?? {}}
+                  forceOpen={forcedOpenId === m.id}
+                />
               ))}
             </div>
           </section>

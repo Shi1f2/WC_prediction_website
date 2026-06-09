@@ -7,6 +7,13 @@ import Bracket2026, {
   emptyBracket2026,
   type Bracket2026State,
 } from "./Bracket2026";
+import {
+  R32_PAIRINGS,
+  R16_TREE,
+  QF_TREE,
+  SF_TREE,
+  parseSlot,
+} from "@/lib/bracketStructure";
 
 type Team = {
   id: number;
@@ -19,6 +26,7 @@ type GroupPicks = Record<string, (number | null)[]>;
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 export default function BoardClient({
+  userId,
   allTeams,
   groups,
   initialGroupPicks,
@@ -26,6 +34,7 @@ export default function BoardClient({
   bracketLocked,
   bracketCommittedAt,
 }: {
+  userId: number;
   allTeams: Team[];
   groups: { letter: string; teams: Team[]; locked: boolean }[];
   initialGroupPicks: GroupPicks;
@@ -33,10 +42,72 @@ export default function BoardClient({
   bracketLocked: boolean;
   bracketCommittedAt?: string | null;
 }) {
+  const storageKey = `wc_board_state_v1_user_${userId}`;
   const [picks, setPicks] = useState<GroupPicks>(initialGroupPicks);
   const [bracket, setBracket] = useState<Bracket2026State>(() =>
     emptyBracket2026()
   );
+  const [hydrated, setHydrated] = useState(false);
+
+  // Hydrate from localStorage on mount so drafts survive reloads. We also
+  // hydrate AFTER lock-in so the user keeps seeing their committed picks.
+  // If localStorage is empty but the user has already committed (e.g. their
+  // browser was cleared, or they're on a different device), we reconstruct
+  // the positional bracket from the set-based DB record.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let localHasPicks = false;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<{
+          picks: GroupPicks;
+          bracket: Bracket2026State;
+        }>;
+        if (parsed.picks) setPicks(parsed.picks);
+        if (parsed.bracket) {
+          const b = parsed.bracket;
+          const anyPick =
+            b.R32?.some((x) => x != null) ||
+            b.R16?.some((x) => x != null) ||
+            b.QF?.some((x) => x != null) ||
+            b.SF?.some((x) => x != null) ||
+            (b.F?.[0] ?? null) != null;
+          if (anyPick) {
+            setBracket(b);
+            localHasPicks = true;
+          }
+        }
+      }
+    } catch {
+      // ignore corrupt local state
+    }
+    // If local storage didn't carry any actual bracket picks and the user has
+    // committed, rebuild the positional state from the DB sets.
+    if (!localHasPicks && bracketCommittedAt) {
+      const rebuilt = reconstructBracketFromSets(
+        initialGroupPicks,
+        initialBracket
+      );
+      setBracket(rebuilt);
+    }
+    setHydrated(true);
+  }, [storageKey, bracketCommittedAt, initialGroupPicks, initialBracket]);
+
+  // Persist every change locally. After lock-in the DB owns state and we
+  // can drop the local copy.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({ picks, bracket })
+      );
+    } catch {
+      // quota / disabled storage — silently fail
+    }
+  }, [picks, bracket, hydrated, storageKey]);
   const [bracketStatus, setBracketStatus] = useState<SaveStatus>("idle");
   const [bracketPending, startBracket] = useTransition();
   const [committed, setCommitted] = useState<boolean>(
@@ -71,6 +142,7 @@ export default function BoardClient({
   );
 
   function changeGroupPick(letter: string, slotIdx: number, val: number | null) {
+    if (committed) return;
     setPicks((prev) => {
       const arr = [...(prev[letter] ?? [null, null, null, null])];
       arr[slotIdx] = val;
@@ -79,6 +151,7 @@ export default function BoardClient({
   }
 
   function clearGroup(letter: string) {
+    if (committed) return;
     setPicks((prev) => ({ ...prev, [letter]: [null, null, null, null] }));
   }
 
@@ -131,22 +204,6 @@ export default function BoardClient({
 
   const allFilled = bracket.F[0] != null;
 
-  // Auto-open the confirm modal the first time everything's picked.
-  // If the user cancels, we only reopen if they un-pick the champion and
-  // pick again — so we avoid pestering them.
-  const lastAutoOpenedAtRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (effectiveBracketLocked) return;
-    if (!allFilled) {
-      lastAutoOpenedAtRef.current = null;
-      return;
-    }
-    const champion = bracket.F[0];
-    if (lastAutoOpenedAtRef.current === String(champion)) return;
-    lastAutoOpenedAtRef.current = String(champion);
-    setLockModalOpen(true);
-  }, [allFilled, bracket.F, effectiveBracketLocked]);
-
   async function lockIn() {
     setLockPending(true);
     setLockError(null);
@@ -173,6 +230,9 @@ export default function BoardClient({
       if (!res.ok) throw new Error(await res.text());
       setCommitted(true);
       setLockModalOpen(false);
+      // Intentionally KEEP localStorage so the user can still see their
+      // picks rendered in the bracket after reload (UI is locked from edits
+      // either way via `committed`).
     } catch {
       setLockError("Couldn't save and lock. Try again.");
     } finally {
@@ -282,7 +342,7 @@ export default function BoardClient({
               picks={picks[letter] ?? [null, null, null, null]}
               onChange={(idx, val) => changeGroupPick(letter, idx, val)}
               onClear={() => clearGroup(letter)}
-              locked={locked}
+              locked={locked || committed}
             />
           ))}
         </div>
@@ -314,6 +374,30 @@ export default function BoardClient({
           </div>
         </Canvas>
       </section>
+
+      {!effectiveBracketLocked && (
+        <div
+          data-no-pan
+          className="fixed bottom-4 left-1/2 z-40 flex h-14 -translate-x-1/2 items-center gap-3 rounded-full border border-outline-variant/40 bg-surface-lowest px-3 shadow-floating"
+        >
+          <span className="mono px-3 text-[10px] uppercase tracking-wider text-on-surface-variant">
+            {allFilled
+              ? "All picks in — ready to commit"
+              : "Pick the Champion to enable"}
+          </span>
+          <button
+            onClick={() => setLockModalOpen(true)}
+            disabled={!allFilled}
+            className={`rounded-full px-5 py-2 text-xs font-bold uppercase tracking-wider transition disabled:cursor-not-allowed ${
+              allFilled
+                ? "bg-secondary text-on-secondary shadow-glow hover:brightness-110"
+                : "bg-surface-high text-on-surface-variant opacity-60"
+            }`}
+          >
+            🔒 Lock in
+          </button>
+        </div>
+      )}
 
       {lockModalOpen && (
         <LockModal
@@ -381,9 +465,82 @@ function LockModal({
   );
 }
 
+// Rebuild the positional bracket state from the set-based DB rows so a
+// committed user always sees their picks rendered, even with empty local
+// storage. We figure out each round's winners by checking which of a match's
+// two possible inputs appears in the NEXT round's set.
+function reconstructBracketFromSets(
+  groupPicks: GroupPicks,
+  sets: Record<string, number[]>
+): Bracket2026State {
+  const state = emptyBracket2026();
+  const r16Set = new Set(sets.R16 ?? []);
+  const qfSet = new Set(sets.QF ?? []);
+  const sfSet = new Set(sets.SF ?? []);
+  const finalSet = new Set(sets.FINAL ?? []);
+
+  function teamsForSlot(slot: string): number[] {
+    const p = parseSlot(slot);
+    if (p.type === "winner") {
+      const id = groupPicks[p.group]?.[0];
+      return id ? [id] : [];
+    }
+    if (p.type === "runnerup") {
+      const id = groupPicks[p.group]?.[1];
+      return id ? [id] : [];
+    }
+    return p.groups
+      .map((g) => groupPicks[g]?.[2])
+      .filter((x): x is number => x != null);
+  }
+
+  for (const m of R32_PAIRINGS) {
+    const leftIds = teamsForSlot(m.left);
+    const rightIds = teamsForSlot(m.right);
+    const leftWinner = leftIds.find((id) => r16Set.has(id));
+    const rightWinner = rightIds.find((id) => r16Set.has(id));
+    if (leftWinner != null) {
+      state.R32[m.idx] = leftWinner;
+      if (parseSlot(m.left).type === "thirdplace")
+        state.thirdPlace[m.idx] = leftWinner;
+    } else if (rightWinner != null) {
+      state.R32[m.idx] = rightWinner;
+      if (parseSlot(m.right).type === "thirdplace")
+        state.thirdPlace[m.idx] = rightWinner;
+    }
+    // Even if no R16-set match, still resolve thirdPlace from any candidate
+    // that landed in R16 set via the other slot — keeps the picker visible.
+  }
+
+  for (let i = 0; i < R16_TREE.length; i++) {
+    const [a, b] = R16_TREE[i];
+    const ta = state.R32[a];
+    const tb = state.R32[b];
+    if (ta != null && qfSet.has(ta)) state.R16[i] = ta;
+    else if (tb != null && qfSet.has(tb)) state.R16[i] = tb;
+  }
+  for (let i = 0; i < QF_TREE.length; i++) {
+    const [a, b] = QF_TREE[i];
+    const ta = state.R16[a];
+    const tb = state.R16[b];
+    if (ta != null && sfSet.has(ta)) state.QF[i] = ta;
+    else if (tb != null && sfSet.has(tb)) state.QF[i] = tb;
+  }
+  for (let i = 0; i < SF_TREE.length; i++) {
+    const [a, b] = SF_TREE[i];
+    const ta = state.QF[a];
+    const tb = state.QF[b];
+    if (ta != null && finalSet.has(ta)) state.SF[i] = ta;
+    else if (tb != null && finalSet.has(tb)) state.SF[i] = tb;
+  }
+  state.F[0] = sets.WINNER?.[0] ?? null;
+  return state;
+}
+
 type DragPayload = { teamId: number; from: number | "pool" };
 
 function GroupCard({
+  letter,
   teams,
   picks,
   onChange,

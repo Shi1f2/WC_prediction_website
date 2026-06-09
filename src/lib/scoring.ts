@@ -1,5 +1,6 @@
 import { sql } from "./db";
 import { POINTS, scoreMatch } from "./matchScore";
+import { gradeMarket } from "./markets";
 
 export { POINTS, scoreMatch };
 
@@ -36,6 +37,20 @@ export async function computeLeaderboard(): Promise<LeaderboardRow[]> {
     if (!m) continue;
     const pts = scoreMatch(p.score_a, p.score_b, m.actual_score_a, m.actual_score_b);
     matchPts.set(p.user_id, (matchPts.get(p.user_id) ?? 0) + pts);
+  }
+
+  // Bonus points from optional betting-style markets (Over/Under, BTTS, etc.).
+  // Rolled into match_points so existing leaderboard UI doesn't need a new column.
+  const marketPreds = await sql<
+    { user_id: number; match_id: number; market: string; pick: string }[]
+  >`
+    SELECT user_id, match_id, market, pick FROM match_market_predictions
+  `;
+  for (const mp of marketPreds) {
+    const m = matchById.get(mp.match_id);
+    if (!m) continue;
+    const pts = gradeMarket(mp.market, mp.pick, m.actual_score_a, m.actual_score_b);
+    if (pts !== 0) matchPts.set(mp.user_id, (matchPts.get(mp.user_id) ?? 0) + pts);
   }
 
   const groupResults = await sql<

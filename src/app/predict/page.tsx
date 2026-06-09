@@ -28,7 +28,7 @@ export default async function PredictHub() {
     {
       href: "/matches",
       title: "Match Scores",
-      blurb: "Predict the exact score for upcoming games. Opens 24h before kickoff.",
+      blurb: "Predict the exact score for upcoming games. Opens 36h before kickoff.",
       done: matchDone,
       total: matchTotal,
       unit: "predictions",
