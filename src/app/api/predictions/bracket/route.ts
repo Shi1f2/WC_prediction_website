@@ -21,6 +21,17 @@ export async function POST(req: Request) {
   if (lockRows.length && new Date(lockRows[0].kickoff_at).getTime() <= Date.now())
     return NextResponse.json({ error: "Locked" }, { status: 403 });
 
+  // Also reject changes if the user has personally committed their bracket.
+  const committed = await sql<{ bracket_committed_at: Date | null }[]>`
+    SELECT bracket_committed_at FROM users WHERE id = ${user.id}
+  `;
+  if (committed[0]?.bracket_committed_at) {
+    return NextResponse.json(
+      { error: "Bracket already locked in" },
+      { status: 403 }
+    );
+  }
+
   const cleaned: Record<string, number[]> = {};
   for (const stage of Object.keys(LIMITS)) {
     const raw = body[stage];

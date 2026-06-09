@@ -90,6 +90,11 @@ export default function Bracket2026({
     return m;
   }, [teamsByGroup]);
 
+  // Per-match readiness: a match's winner buttons unlock only when BOTH of
+  // its inputs are resolved. For R32, that means both team-slots (group winner
+  // / runner-up / picked 3rd-place) resolve to teams. For R16+, the two feeder
+  // matches in the previous round must already have winners.
+
   function teamForSlot(slot: SlotRef, r32MatchIdx: number): Team | null {
     const p = parseSlot(slot);
     if (p.type === "winner") {
@@ -140,17 +145,19 @@ export default function Bracket2026({
     selected,
     onClick,
     side,
+    stageOpen = true,
   }: {
     team: Team | null;
     placeholder?: string;
     selected: boolean;
     onClick: () => void;
     side: "top" | "bottom";
+    stageOpen?: boolean;
   }) {
     return (
       <button
         data-no-pan
-        disabled={locked || !team}
+        disabled={locked || !team || !stageOpen}
         onClick={onClick}
         className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs font-bold uppercase transition disabled:opacity-50 ${
           selected
@@ -225,11 +232,23 @@ export default function Bracket2026({
     const leftParsed = parseSlot(m.left);
     const rightParsed = parseSlot(m.right);
     const winnerId = state.R32[matchIdx];
+    const matchReady = leftTeam !== null && rightTeam !== null;
 
     return (
       <div
-        className="overflow-hidden rounded-lg border border-outline-variant/40 bg-surface-low shadow-sm shadow-black/20"
+        className={`overflow-hidden rounded-lg border bg-surface-low shadow-sm shadow-black/20 ${
+          matchReady ? "border-outline-variant/40" : "border-outline-variant/20"
+        }`}
         style={{ width: 200 }}
+        title={
+          matchReady
+            ? undefined
+            : leftTeam && !rightTeam
+              ? "Pick the 3rd-place team for this matchup"
+              : !leftTeam && rightTeam
+                ? "Pick the 3rd-place team for this matchup"
+                : "Resolve both teams for this matchup"
+        }
       >
         <div className="mono flex items-center justify-between bg-surface-container px-2 py-1 text-[9px] uppercase tracking-widest text-on-surface-variant">
           <span>R32 · {matchIdx + 1}</span>
@@ -241,6 +260,7 @@ export default function Bracket2026({
           selected={winnerId != null && winnerId === leftTeam?.id}
           onClick={() => leftTeam && onPickWinner("R32", matchIdx, leftTeam.id)}
           side="top"
+          stageOpen={matchReady}
         />
         <TeamButton
           team={rightTeam}
@@ -248,6 +268,7 @@ export default function Bracket2026({
           selected={winnerId != null && winnerId === rightTeam?.id}
           onClick={() => rightTeam && onPickWinner("R32", matchIdx, rightTeam.id)}
           side="bottom"
+          stageOpen={matchReady}
         />
         {leftParsed.type === "thirdplace" && (
           <ThirdPlacePicker
@@ -286,10 +307,21 @@ export default function Bracket2026({
             : state.F;
     const winnerId = arr[matchIdx];
     const [a, b] = inputs;
+    // Only this specific match needs its two feeders to have winners.
+    const feederStage: "R32" | "R16" | "QF" | "SF" =
+      round === "R16" ? "R32" : round === "QF" ? "R16" : round === "SF" ? "QF" : "SF";
+    const feederArr = state[feederStage];
+    const stageOpen =
+      feederArr[matchIdx * 2] != null && feederArr[matchIdx * 2 + 1] != null;
     return (
       <div
-        className="overflow-hidden rounded-lg border border-outline-variant/40 bg-surface-low shadow-sm shadow-black/20"
+        className={`overflow-hidden rounded-lg border bg-surface-low shadow-sm shadow-black/20 ${
+          stageOpen
+            ? "border-outline-variant/40"
+            : "border-outline-variant/20 opacity-60"
+        }`}
         style={{ width: 200 }}
+        title={stageOpen ? undefined : "Finish the previous round first"}
       >
         <div className="mono flex items-center justify-between bg-surface-container px-2 py-1 text-[9px] uppercase tracking-widest text-on-surface-variant">
           <span>{label}</span>
@@ -301,6 +333,7 @@ export default function Bracket2026({
           selected={winnerId != null && winnerId === a?.id}
           onClick={() => a && onPickWinner(round, matchIdx, a.id)}
           side="top"
+          stageOpen={stageOpen}
         />
         <TeamButton
           team={b}
@@ -308,6 +341,7 @@ export default function Bracket2026({
           selected={winnerId != null && winnerId === b?.id}
           onClick={() => b && onPickWinner(round, matchIdx, b.id)}
           side="bottom"
+          stageOpen={stageOpen}
         />
       </div>
     );
@@ -356,6 +390,17 @@ export default function Bracket2026({
 
   return (
     <div>
+      {!locked && (
+        <div
+          data-no-pan
+          className="mb-6 rounded-2xl border border-outline-variant/40 bg-surface-low/60 px-5 py-3 text-sm text-on-surface"
+        >
+          For each <span className="mono">3-X/Y/Z</span> slot, pick which
+          group&apos;s 3rd-place team plays. That R32 matchup&apos;s winner
+          button unlocks once both sides are resolved — then the next round
+          opens as soon as the two feeder matches have winners.
+        </div>
+      )}
       <div className="flex items-start gap-3">
         <Column label="Round of 32">
           {LEFT_R32.map((i) => (
@@ -497,18 +542,9 @@ export default function Bracket2026({
             Reset bracket
           </button>
         )}
-        {!locked && (
-          <button
-            onClick={onSave}
-            disabled={pending}
-            className="rounded-full bg-secondary px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110 disabled:opacity-40"
-          >
-            {pending ? "Saving…" : "Save bracket"}
-          </button>
-        )}
         {locked && (
-          <span className="text-sm text-on-background-variant">
-            Bracket locked
+          <span className="mono text-sm uppercase text-secondary">
+            🔒 Locked in
           </span>
         )}
       </div>

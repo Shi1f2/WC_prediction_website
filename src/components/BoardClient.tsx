@@ -24,12 +24,14 @@ export default function BoardClient({
   initialGroupPicks,
   initialBracket,
   bracketLocked,
+  bracketCommittedAt,
 }: {
   allTeams: Team[];
   groups: { letter: string; teams: Team[]; locked: boolean }[];
   initialGroupPicks: GroupPicks;
   initialBracket: Record<string, number[]>;
   bracketLocked: boolean;
+  bracketCommittedAt?: string | null;
 }) {
   const [picks, setPicks] = useState<GroupPicks>(initialGroupPicks);
   const [bracket, setBracket] = useState<Bracket2026State>(() =>
@@ -37,6 +39,13 @@ export default function BoardClient({
   );
   const [bracketStatus, setBracketStatus] = useState<SaveStatus>("idle");
   const [bracketPending, startBracket] = useTransition();
+  const [committed, setCommitted] = useState<boolean>(
+    !!bracketCommittedAt
+  );
+  const [lockModalOpen, setLockModalOpen] = useState(false);
+  const [lockPending, setLockPending] = useState(false);
+  const [lockError, setLockError] = useState<string | null>(null);
+  const effectiveBracketLocked = bracketLocked || committed;
 
   // Build teams-by-group map for the bracket to resolve slot references.
   const teamsByGroup = useMemo(() => {
@@ -78,20 +87,113 @@ export default function BoardClient({
     matchIdx: number,
     teamId: number | null
   ) {
+    if (effectiveBracketLocked) return;
     setBracket((prev) => {
-      const arr = [...prev[round]];
-      arr[matchIdx] = teamId;
-      return { ...prev, [round]: arr };
+      const next: Bracket2026State = {
+        ...prev,
+        R32: [...prev.R32],
+        R16: [...prev.R16],
+        QF: [...prev.QF],
+        SF: [...prev.SF],
+        F: [...prev.F],
+      };
+      next[round][matchIdx] = teamId;
+
+      // Cascade-clear: anything downstream that depended on this slot.
+      let idx = matchIdx;
+      const downstream: Array<"R16" | "QF" | "SF" | "F"> =
+        round === "R32"
+          ? ["R16", "QF", "SF", "F"]
+          : round === "R16"
+            ? ["QF", "SF", "F"]
+            : round === "QF"
+              ? ["SF", "F"]
+              : round === "SF"
+                ? ["F"]
+                : [];
+      for (const stage of downstream) {
+        idx = Math.floor(idx / 2);
+        next[stage][idx] = null;
+      }
+      return next;
     });
     setBracketStatus("idle");
   }
 
   function pickThirdPlace(r32MatchIdx: number, teamId: number | null) {
+    if (effectiveBracketLocked) return;
     setBracket((prev) => ({
       ...prev,
       thirdPlace: { ...prev.thirdPlace, [r32MatchIdx]: teamId },
     }));
     setBracketStatus("idle");
+  }
+
+  const allFilled = bracket.F[0] != null;
+
+  // Auto-open the confirm modal the first time everything's picked.
+  // If the user cancels, we only reopen if they un-pick the champion and
+  // pick again — so we avoid pestering them.
+  const lastAutoOpenedAtRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (effectiveBracketLocked) return;
+    if (!allFilled) {
+      lastAutoOpenedAtRef.current = null;
+      return;
+    }
+    const champion = bracket.F[0];
+    if (lastAutoOpenedAtRef.current === String(champion)) return;
+    lastAutoOpenedAtRef.current = String(champion);
+    setLockModalOpen(true);
+  }, [allFilled, bracket.F, effectiveBracketLocked]);
+
+  async function lockIn() {
+    setLockPending(true);
+    setLockError(null);
+    try {
+      // 1. Persist every group's picks (1st/2nd/3rd/4th).
+      await Promise.all(
+        Object.entries(picks).map(async ([letter, arr]) => {
+          const positions: Record<number, number | null> = {};
+          for (let i = 0; i < 4; i++) positions[i + 1] = arr[i] ?? null;
+          const res = await fetch("/api/predictions/group", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ group_letter: letter, positions }),
+          });
+          if (!res.ok) throw new Error(`group ${letter} save failed`);
+        })
+      );
+      // 2. Persist bracket winners (and the derived stage sets).
+      await saveBracketSync(bracket);
+      // 3. Stamp the lock timestamp so further edits are rejected.
+      const res = await fetch("/api/predictions/bracket/lock", {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setCommitted(true);
+      setLockModalOpen(false);
+    } catch {
+      setLockError("Couldn't save and lock. Try again.");
+    } finally {
+      setLockPending(false);
+    }
+  }
+
+  async function saveBracketSync(state: Bracket2026State) {
+    const payload = {
+      R16: state.R32.filter((x): x is number => x != null),
+      QF: state.R16.filter((x): x is number => x != null),
+      SF: state.QF.filter((x): x is number => x != null),
+      FINAL: state.SF.filter((x): x is number => x != null),
+      WINNER: state.F[0] != null ? [state.F[0]] : [],
+    };
+    const res = await fetch("/api/predictions/bracket", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error("save failed");
   }
 
   function saveBracket(stateOverride?: Bracket2026State) {
@@ -122,6 +224,7 @@ export default function BoardClient({
   }
 
   function resetBracket() {
+    if (effectiveBracketLocked) return;
     const empty = emptyBracket2026();
     setBracket(empty);
     saveBracket(empty);
@@ -160,7 +263,7 @@ export default function BoardClient({
           </h2>
           <div className="flex items-center gap-3">
             <span className="mono text-xs uppercase tracking-wider text-on-surface-variant">
-              {advancing.size}/24 advancers · auto-saves
+              {advancing.size}/24 advancers · saved when you lock the bracket
             </span>
             <button
               onClick={resetAll}
@@ -206,11 +309,74 @@ export default function BoardClient({
               onReset={resetBracket}
               saveStatus={bracketStatus}
               pending={bracketPending}
-              locked={bracketLocked}
+              locked={effectiveBracketLocked}
             />
           </div>
         </Canvas>
       </section>
+
+      {lockModalOpen && (
+        <LockModal
+          pending={lockPending}
+          error={lockError}
+          onCancel={() => setLockModalOpen(false)}
+          onConfirm={lockIn}
+        />
+      )}
+    </div>
+  );
+}
+
+function LockModal({
+  pending,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  pending: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur"
+      onClick={pending ? undefined : onCancel}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-outline-variant/40 bg-surface-container p-6 text-on-surface shadow-floating"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="display-italic mb-2 text-3xl uppercase text-secondary">
+          Lock it in?
+        </div>
+        <p className="text-sm text-on-surface-variant">
+          Once you lock your bracket you <b className="text-on-surface">can&apos;t</b>
+          {" "}change any of your knockout picks. Make sure every matchup, third-place
+          slot, and champion is the one you want.
+        </p>
+        {error && (
+          <p className="mt-3 rounded-lg bg-error/15 px-3 py-2 text-sm text-error">
+            {error}
+          </p>
+        )}
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button
+            onClick={onCancel}
+            disabled={pending}
+            className="rounded-full border border-outline-variant/40 px-4 py-2 text-xs font-bold uppercase tracking-wider text-on-surface hover:bg-surface-high disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={pending}
+            className="rounded-full bg-secondary px-6 py-2 text-xs font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110 disabled:opacity-50"
+          >
+            {pending ? "Locking…" : "Lock in"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -218,7 +384,6 @@ export default function BoardClient({
 type DragPayload = { teamId: number; from: number | "pool" };
 
 function GroupCard({
-  letter,
   teams,
   picks,
   onChange,
@@ -232,45 +397,12 @@ function GroupCard({
   onClear: () => void;
   locked: boolean;
 }) {
-  const [status, setStatus] = useState<SaveStatus>("idle");
   const [dragOver, setDragOver] = useState<number | "pool" | null>(null);
 
   const teamById = new Map(teams.map((t) => [t.id, t]));
   const used = new Set(picks.filter((x): x is number => x != null));
   const pool = teams.filter((t) => !used.has(t.id));
   const anyPicked = picks.some((x) => x != null);
-
-  const picksKey = picks.map((x) => x ?? "").join(",");
-  const lastSavedKey = useRef(picksKey);
-
-  useEffect(() => {
-    if (picksKey === lastSavedKey.current) return;
-    if (locked) return;
-    setStatus("saving");
-    const t = setTimeout(async () => {
-      try {
-        const positions: Record<number, number | null> = {};
-        for (let i = 0; i < 4; i++) positions[i + 1] = picks[i] ?? null;
-        const res = await fetch("/api/predictions/group", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ group_letter: letter, positions }),
-        });
-        if (!res.ok) throw new Error();
-        lastSavedKey.current = picksKey;
-        setStatus("saved");
-      } catch {
-        setStatus("error");
-      }
-    }, 450);
-    return () => clearTimeout(t);
-  }, [picksKey, picks, letter, locked]);
-
-  useEffect(() => {
-    if (status !== "saved") return;
-    const t = setTimeout(() => setStatus("idle"), 1500);
-    return () => clearTimeout(t);
-  }, [status]);
 
   function place(teamId: number, from: number | "pool", to: number | "pool") {
     if (locked) return;
@@ -342,7 +474,11 @@ function GroupCard({
           Group {letter}
         </h3>
         <div className="flex items-center gap-2">
-          <StatusBadge status={status} locked={locked} />
+          {locked && (
+            <span className="mono rounded-full bg-surface-high px-2 py-0.5 text-[9px] uppercase tracking-wider text-on-surface-variant">
+              Locked
+            </span>
+          )}
           {!locked && anyPicked && (
             <button
               onClick={onClear}

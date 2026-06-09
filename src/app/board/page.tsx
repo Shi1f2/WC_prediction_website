@@ -10,6 +10,12 @@ export default async function BoardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const committedRows = await sql<{ bracket_committed_at: Date | null }[]>`
+    SELECT bracket_committed_at FROM users WHERE id = ${user.id}
+  `;
+  const bracketCommittedAt =
+    committedRows[0]?.bracket_committed_at?.toISOString() ?? null;
+
   await autoSyncForPage();
 
   const teams = await sql<
@@ -108,6 +114,7 @@ export default async function BoardPage() {
         initialGroupPicks={initialGroupPicks}
         initialBracket={bracketInitial}
         bracketLocked={bracketLocked}
+        bracketCommittedAt={bracketCommittedAt}
       />
     </div>
   );
