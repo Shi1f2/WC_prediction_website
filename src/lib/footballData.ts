@@ -141,11 +141,21 @@ export function normalizeTeamName(s: string): string {
 const NAME_ALIASES: Record<string, string[]> = {
   "united states": ["usa", "us", "united states of america"],
   "south korea": ["korea republic", "republic of korea", "korea south"],
-  "ivory coast": ["cote d ivoire", "cote divoire"],
+  "ivory coast": ["cote d ivoire", "cote divoire", "côte d ivoire"],
   "czechia": ["czech republic"],
-  "turkey": ["turkiye", "turkey turkiye"],
+  "turkey": ["turkiye", "turkey turkiye", "türkiye"],
   "congo dr": ["dr congo", "democratic republic of congo", "drc"],
-  "bosnia herzegovina": ["bosnia and herzegovina", "bih"],
+  "bosnia herzegovina": [
+    "bosnia and herzegovina",
+    "bih",
+    "bosnia herzegovina",
+  ],
+  "cape verde": ["cabo verde", "cape verde islands"],
+  "south africa": ["rsa", "republic of south africa"],
+  "saudi arabia": ["ksa", "saudi"],
+  "new zealand": ["nzl", "all whites"],
+  "curacao": ["curaçao"],
+  "haiti": ["haïti"],
 };
 
 export function teamNameMatches(apiName: string, dbName: string): boolean {

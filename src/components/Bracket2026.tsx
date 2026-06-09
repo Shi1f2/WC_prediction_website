@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, Children } from "react";
 import Flag from "./Flag";
 import {
   R32_PAIRINGS,
@@ -43,8 +43,8 @@ export function emptyBracket2026(): Bracket2026State {
 
 type Round = "R32" | "R16" | "QF" | "SF" | "F";
 
-const R32_CARD_H = 78;
-const R32_GAP = 14;
+const R32_CARD_H = 170;
+const R32_GAP = 18;
 
 // Pair each R32 match to its bracket side. Left half = R32 matches whose path
 // reaches the "left finalist"; right half mirrors.
@@ -191,7 +191,7 @@ export default function Bracket2026({
     return (
       <div
         data-no-pan
-        className="flex flex-wrap gap-1 border-t border-outline-variant/30 bg-surface-low px-2 py-1.5"
+        className="flex flex-wrap gap-1 border-t border-outline-variant/30 bg-surface-low px-1.5 py-1.5"
       >
         {candidates.map((t) => {
           const on = picked === t.id;
@@ -202,7 +202,7 @@ export default function Bracket2026({
               onClick={() =>
                 onPickThirdPlace(r32MatchIdx, on ? null : t.id)
               }
-              className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider transition disabled:opacity-50 ${
+              className={`flex items-center gap-0.5 rounded-full px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider transition disabled:opacity-50 ${
                 on
                   ? "bg-secondary text-on-secondary"
                   : "bg-surface-container text-on-surface hover:bg-surface-high"
@@ -325,16 +325,23 @@ export default function Bracket2026({
     label: string;
     pt?: number;
   }) {
+    const items = Children.toArray(children);
+    const slotH = items.length > 0 ? COL_H / items.length : COL_H;
     return (
       <div className="flex flex-col items-center">
         <div className="mono mb-3 h-4 text-[10px] uppercase tracking-widest text-on-background-variant">
           {label}
         </div>
-        <div
-          className="flex flex-col items-center justify-around"
-          style={{ height: COL_H, paddingTop: pt }}
-        >
-          {children}
+        <div className="flex flex-col" style={{ paddingTop: pt }}>
+          {items.map((child, i) => (
+            <div
+              key={i}
+              className="flex items-center justify-center"
+              style={{ height: slotH }}
+            >
+              {child}
+            </div>
+          ))}
         </div>
       </div>
     );

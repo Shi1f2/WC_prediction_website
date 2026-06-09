@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { login, getCurrentUser } from "@/lib/auth";
+import SubmitButton from "@/components/SubmitButton";
 
 export const dynamic = "force-dynamic";
 
@@ -63,9 +64,12 @@ export default async function LoginPage({
               className="mt-1 block w-full rounded-lg border border-outline-variant/40 bg-surface-low px-3 py-2.5 text-sm focus:border-secondary focus:outline-none"
             />
           </label>
-          <button className="w-full rounded-full bg-secondary py-3 text-sm font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110">
+          <SubmitButton
+            className="w-full rounded-full bg-secondary py-3 text-sm font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110"
+            pendingLabel="Logging in…"
+          >
             Log in
-          </button>
+          </SubmitButton>
         </form>
         <p className="mt-5 text-center text-sm text-on-surface-variant">
           No account?{" "}

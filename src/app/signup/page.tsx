@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { signup, getCurrentUser } from "@/lib/auth";
+import SubmitButton from "@/components/SubmitButton";
 
 export const dynamic = "force-dynamic";
 
@@ -50,9 +51,12 @@ export default async function SignupPage({
             autoComplete="new-password"
             required
           />
-          <button className="w-full rounded-full bg-secondary py-3 text-sm font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110">
+          <SubmitButton
+            className="w-full rounded-full bg-secondary py-3 text-sm font-bold uppercase tracking-wider text-on-secondary shadow-glow hover:brightness-110"
+            pendingLabel="Creating account…"
+          >
             Sign up
-          </button>
+          </SubmitButton>
         </form>
         <p className="mt-5 text-center text-sm text-on-surface-variant">
           Already have an account?{" "}
