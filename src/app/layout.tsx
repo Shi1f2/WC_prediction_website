@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { NavLink, MobileNavLink } from "@/components/NavLink";
 
 export const metadata = {
-  title: "Hexet WC Predictions",
+  title: " WC Predictions",
   description: "Predict the 2026 World Cup with friends.",
 };
 
