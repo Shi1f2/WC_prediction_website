@@ -133,44 +133,10 @@ async function main() {
     }
   }
   console.log("Inserted 48 teams.");
-
-  // Group stage matches: round-robin per group, 6 matches each = 72 total.
-  // Pairings within a 4-team group [t1,t2,t3,t4]:
-  //   MD1: t1-t2, t3-t4
-  //   MD2: t1-t3, t2-t4
-  //   MD3: t1-t4, t2-t3
-  // Kickoffs are placeholders starting June 11, 2026 — edit dates in admin.
-  const PAIRINGS: [number, number][][] = [
-    [[0, 1], [2, 3]],
-    [[0, 2], [1, 3]],
-    [[0, 3], [1, 2]],
-  ];
-
-  const startDay = new Date("2026-06-11T16:00:00Z");
-  let orderIndex = 0;
-  let matchCount = 0;
-
-  for (let md = 0; md < 3; md++) {
-    for (const letter of Object.keys(GROUPS)) {
-      const teamRows = await sql<{ id: number }[]>`
-        SELECT id FROM teams WHERE group_letter = ${letter} ORDER BY id
-      `;
-      const ids = teamRows.map((r) => r.id);
-      for (const [a, b] of PAIRINGS[md]) {
-        const kickoff = new Date(startDay);
-        kickoff.setDate(kickoff.getDate() + md * 7 + Math.floor(matchCount / 4));
-        kickoff.setUTCHours(16 + (matchCount % 4) * 2);
-        await sql`
-          INSERT INTO matches
-            (stage, group_letter, team_a_id, team_b_id, kickoff_at, order_index)
-          VALUES
-            ('group', ${letter}, ${ids[a]}, ${ids[b]}, ${kickoff.toISOString()}, ${orderIndex++})
-        `;
-        matchCount++;
-      }
-    }
-  }
-  console.log(`Inserted ${matchCount} group-stage matches.`);
+  console.log(
+    "Skipping fixture seed — the football-data.org auto-sync will pull " +
+    "real match dates, scores, and live status on the next page load."
+  );
   await sql.end();
 }
 
