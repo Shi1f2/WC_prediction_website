@@ -4,7 +4,7 @@ import { useState, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Flag from "@/components/Flag";
 import { POINTS, scoreMatch } from "@/lib/matchScore";
-import { MARKET_BY_ID } from "@/lib/markets";
+import { MARKET_BY_ID, gradeMarket } from "@/lib/markets";
 import MarketPicks from "./MarketPicks";
 
 type Match = {
@@ -44,7 +44,7 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const OPEN_WINDOW_MS = 36 * 60 * 60 * 1000;
+const OPEN_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 function formatCountdown(ms: number): string {
   const d = Math.floor(ms / DAY_MS);
@@ -76,11 +76,11 @@ function liveMinute(
 export default function MatchRow({
   match,
   marketPicks = {},
-  forceOpen = false,
+  pickLabel = "Your pick",
 }: {
   match: Match;
   marketPicks?: Record<string, string>;
-  forceOpen?: boolean;
+  pickLabel?: string;
 }) {
   const router = useRouter();
 
@@ -116,7 +116,7 @@ export default function MatchRow({
   const kickoff = new Date(match.kickoff_at).getTime();
   const msUntil = kickoff - now;
   const locked = msUntil <= 0;
-  const notOpenYet = !forceOpen && msUntil > OPEN_WINDOW_MS;
+  const notOpenYet = msUntil > OPEN_WINDOW_MS;
   const isLive = match.status != null && LIVE_STATUSES.has(match.status);
   const isFinal =
     (match.status != null && FINAL_STATUSES.has(match.status)) ||
@@ -143,6 +143,24 @@ export default function MatchRow({
           match.actual_score_a!,
           match.actual_score_b!,
         )
+      : null;
+
+  // Combined per-match totals across exact-score bet + every market pick.
+  // Computed on the client from the same catalog the leaderboard uses, so
+  // what's shown here matches what users see on the standings.
+  const marketPointsTotal =
+    hasScore && Object.keys(marketPicks).length > 0
+      ? Object.entries(marketPicks).reduce(
+          (sum, [m, p]) =>
+            sum + gradeMarket(m, p, match.actual_score_a!, match.actual_score_b!),
+          0,
+        )
+      : 0;
+  const matchTotalFinal =
+    isFinal ? (earnedPoints ?? 0) + marketPointsTotal : null;
+  const matchTotalProvisional =
+    !isFinal && hasScore
+      ? (provisionalPoints ?? 0) + marketPointsTotal
       : null;
 
   // Read-only when bet is already submitted, kickoff has passed, or window
@@ -268,7 +286,7 @@ export default function MatchRow({
             ? `Group ${match.group_letter}`
             : STAGE_LABELS[match.stage] ?? match.stage}
           {" · "}
-          {new Date(match.kickoff_at).toLocaleTimeString(undefined, {
+          {new Date(match.kickoff_at).toLocaleTimeString("en-GB", {
             hour: "2-digit",
             minute: "2-digit",
           })}
@@ -309,6 +327,7 @@ export default function MatchRow({
             onChange={(e) => setA(e.target.value)}
             placeholder="–"
             className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
+            suppressHydrationWarning
           />
           <span className="mono text-secondary">–</span>
           <input
@@ -320,6 +339,7 @@ export default function MatchRow({
             onChange={(e) => setB(e.target.value)}
             placeholder="–"
             className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
+            suppressHydrationWarning
           />
         </div>
         <div className="flex items-center gap-2 truncate">
@@ -330,7 +350,7 @@ export default function MatchRow({
       {!locked && !notOpenYet && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="mono text-[10px] uppercase tracking-wider text-on-surface-variant">
-            Exact score · optional ·{" "}
+            Score · optional ·{" "}
             <span className="text-primary/90">+10</span>
             <span className="opacity-40"> / </span>
             <span className="text-error/90">−10</span>
@@ -347,6 +367,23 @@ export default function MatchRow({
         onChange={setMarketDraft}
         readOnly={isReadOnly}
         hideIfEmpty={notOpenYet}
+        accumulated={
+          matchTotalFinal != null
+            ? {
+                total: matchTotalFinal,
+                exactPart: earnedPoints,
+                marketPart: marketPointsTotal,
+                isLive: false,
+              }
+            : matchTotalProvisional != null
+              ? {
+                  total: matchTotalProvisional,
+                  exactPart: provisionalPoints,
+                  marketPart: marketPointsTotal,
+                  isLive: true,
+                }
+              : null
+        }
       />
       {!isReadOnly && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -399,44 +436,10 @@ export default function MatchRow({
               : "border-primary/30 bg-primary/5"
           }`}
         >
-          <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-wider">
             <span className={isLive ? "text-error" : "text-primary"}>
               {isLive ? "Live result" : "Final result"}
             </span>
-            {earnedPoints != null && (
-              <span
-                className={`mono rounded-full px-2 py-0.5 ${
-                  earnedPoints > 0
-                    ? "bg-primary/20 text-primary"
-                    : earnedPoints < 0
-                      ? "bg-error/20 text-error"
-                      : "bg-surface-high text-on-surface-variant"
-                }`}
-              >
-                {earnedPoints > 0
-                  ? `+${earnedPoints} pts`
-                  : earnedPoints < 0
-                    ? `${earnedPoints} pts`
-                    : "0 pts"}
-              </span>
-            )}
-            {provisionalPoints != null && (
-              <span
-                className={`mono rounded-full px-2 py-0.5 ${
-                  provisionalPoints > 0
-                    ? "bg-secondary/20 text-secondary"
-                    : provisionalPoints < 0
-                      ? "bg-error/20 text-error"
-                      : "bg-surface-high text-on-surface-variant"
-                }`}
-              >
-                {provisionalPoints > 0
-                  ? `+${provisionalPoints} so far`
-                  : provisionalPoints < 0
-                    ? `${provisionalPoints} so far`
-                    : "0 so far"}
-              </span>
-            )}
           </div>
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-sm">
             <div className="text-right text-on-surface-variant">Actual</div>
@@ -451,7 +454,7 @@ export default function MatchRow({
             {hasPrediction ? (
               <>
                 <div className="text-right text-on-surface-variant">
-                  Your pick
+                  {pickLabel}
                 </div>
                 <div className="mono text-center text-base font-bold text-on-surface-variant">
                   {match.pred_a} – {match.pred_b}

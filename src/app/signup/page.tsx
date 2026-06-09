@@ -1,8 +1,22 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { signup, getCurrentUser } from "@/lib/auth";
 import SubmitButton from "@/components/SubmitButton";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Create your account",
+  description:
+    "Create an account to predict every match of the 2026 FIFA World Cup, fill out your bracket, and join a private league with friends.",
+  alternates: { canonical: "/signup" },
+  openGraph: {
+    title: "Create your account · WC Prediction League",
+    description:
+      "Join a private friends-only league for the 2026 FIFA World Cup. Predict scores, build your bracket, climb the leaderboard.",
+    url: "/signup",
+  },
+};
 
 export default async function SignupPage({
   searchParams,

@@ -45,9 +45,12 @@ export default async function BoardPage() {
   const lockMap = new Map(
     firstKickoff.map((r) => [r.group_letter, new Date(r.kickoff_at).getTime()])
   );
+  const bracketLockAt =
+    firstKnockout.length > 0
+      ? new Date(firstKnockout[0].kickoff_at).toISOString()
+      : null;
   const bracketLocked =
-    firstKnockout.length > 0 &&
-    new Date(firstKnockout[0].kickoff_at).getTime() <= Date.now();
+    bracketLockAt != null && new Date(bracketLockAt).getTime() <= Date.now();
 
   type T = (typeof teams)[number];
   const groupMap = new Map<string, T[]>();
@@ -72,6 +75,7 @@ export default async function BoardPage() {
       letter,
       teams: groupMap.get(letter)!,
       locked: lock != null && Date.now() > lock,
+      lockAt: lock != null ? new Date(lock).toISOString() : null,
     };
   });
 
@@ -115,6 +119,7 @@ export default async function BoardPage() {
         initialGroupPicks={initialGroupPicks}
         initialBracket={bracketInitial}
         bracketLocked={bracketLocked}
+        bracketLockAt={bracketLockAt}
         bracketCommittedAt={bracketCommittedAt}
       />
     </div>

@@ -5,7 +5,6 @@ import MatchRow from "./MatchRow";
 import DemoDay from "./DemoDay";
 import { autoSyncForPage } from "@/lib/autoSync";
 import { cookies } from "next/headers";
-import { FORCE_OPEN_FIRST_MATCH } from "@/lib/featureFlags";
 
 export const dynamic = "force-dynamic";
 
@@ -67,8 +66,6 @@ export default async function MatchesPage() {
     marketsByMatch.set(r.match_id, cur);
   }
 
-  const forcedOpenId = FORCE_OPEN_FIRST_MATCH ? rows[0]?.id ?? null : null;
-
   const byDay = new Map<string, MatchRowDb[]>();
   for (const r of rows) {
     const day = r.kickoff_at.slice(0, 10);
@@ -87,7 +84,7 @@ export default async function MatchesPage() {
           Match <span className="text-secondary">Predictions</span>
         </h1>
         <p className="text-on-background-variant">
-          Match predictions open <b>36 hours</b> before kickoff and lock at kickoff.
+          Match predictions open <b>48 hours</b> before kickoff and lock at kickoff.
           Come back daily to predict the next day&apos;s games.
         </p>
       </header>
@@ -135,7 +132,6 @@ export default async function MatchesPage() {
                   key={m.id}
                   match={m}
                   marketPicks={marketsByMatch.get(m.id) ?? {}}
-                  forceOpen={forcedOpenId === m.id}
                 />
               ))}
             </div>

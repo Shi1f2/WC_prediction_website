@@ -7,13 +7,8 @@ import Bracket2026, {
   emptyBracket2026,
   type Bracket2026State,
 } from "./Bracket2026";
-import {
-  R32_PAIRINGS,
-  R16_TREE,
-  QF_TREE,
-  SF_TREE,
-  parseSlot,
-} from "@/lib/bracketStructure";
+import { reconstructBracketFromSets } from "@/lib/bracketReconstruct";
+import LockCountdown from "./LockCountdown";
 
 type Team = {
   id: number;
@@ -32,14 +27,21 @@ export default function BoardClient({
   initialGroupPicks,
   initialBracket,
   bracketLocked,
+  bracketLockAt,
   bracketCommittedAt,
 }: {
   userId: number;
   allTeams: Team[];
-  groups: { letter: string; teams: Team[]; locked: boolean }[];
+  groups: {
+    letter: string;
+    teams: Team[];
+    locked: boolean;
+    lockAt: string | null;
+  }[];
   initialGroupPicks: GroupPicks;
   initialBracket: Record<string, number[]>;
   bracketLocked: boolean;
+  bracketLockAt: string | null;
   bracketCommittedAt?: string | null;
 }) {
   const storageKey = `wc_board_state_v1_user_${userId}`;
@@ -334,7 +336,7 @@ export default function BoardClient({
           </div>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {groups.map(({ letter, teams, locked }) => (
+          {groups.map(({ letter, teams, locked, lockAt }) => (
             <GroupCard
               key={letter}
               letter={letter}
@@ -343,19 +345,27 @@ export default function BoardClient({
               onChange={(idx, val) => changeGroupPick(letter, idx, val)}
               onClear={() => clearGroup(letter)}
               locked={locked || committed}
+              lockAt={lockAt}
             />
           ))}
         </div>
       </section>
 
       <section>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="display-italic text-2xl uppercase text-on-background">
             Knockout Bracket
           </h2>
-          <span className="mono text-xs text-on-background-variant">
-            Pool: {bracketTeams.length} teams (your top-2 advancers)
-          </span>
+          <div className="flex flex-wrap items-center gap-3">
+            <LockCountdown
+              lockAt={bracketLockAt}
+              locked={effectiveBracketLocked}
+              prefix="Picks lock"
+            />
+            <span className="mono text-xs text-on-background-variant">
+              Pool: {bracketTeams.length} teams (your top-2 advancers)
+            </span>
+          </div>
         </div>
         <Canvas>
           <div className="p-10" style={{ width: 3200 }}>
@@ -465,78 +475,6 @@ function LockModal({
   );
 }
 
-// Rebuild the positional bracket state from the set-based DB rows so a
-// committed user always sees their picks rendered, even with empty local
-// storage. We figure out each round's winners by checking which of a match's
-// two possible inputs appears in the NEXT round's set.
-function reconstructBracketFromSets(
-  groupPicks: GroupPicks,
-  sets: Record<string, number[]>
-): Bracket2026State {
-  const state = emptyBracket2026();
-  const r16Set = new Set(sets.R16 ?? []);
-  const qfSet = new Set(sets.QF ?? []);
-  const sfSet = new Set(sets.SF ?? []);
-  const finalSet = new Set(sets.FINAL ?? []);
-
-  function teamsForSlot(slot: string): number[] {
-    const p = parseSlot(slot);
-    if (p.type === "winner") {
-      const id = groupPicks[p.group]?.[0];
-      return id ? [id] : [];
-    }
-    if (p.type === "runnerup") {
-      const id = groupPicks[p.group]?.[1];
-      return id ? [id] : [];
-    }
-    return p.groups
-      .map((g) => groupPicks[g]?.[2])
-      .filter((x): x is number => x != null);
-  }
-
-  for (const m of R32_PAIRINGS) {
-    const leftIds = teamsForSlot(m.left);
-    const rightIds = teamsForSlot(m.right);
-    const leftWinner = leftIds.find((id) => r16Set.has(id));
-    const rightWinner = rightIds.find((id) => r16Set.has(id));
-    if (leftWinner != null) {
-      state.R32[m.idx] = leftWinner;
-      if (parseSlot(m.left).type === "thirdplace")
-        state.thirdPlace[m.idx] = leftWinner;
-    } else if (rightWinner != null) {
-      state.R32[m.idx] = rightWinner;
-      if (parseSlot(m.right).type === "thirdplace")
-        state.thirdPlace[m.idx] = rightWinner;
-    }
-    // Even if no R16-set match, still resolve thirdPlace from any candidate
-    // that landed in R16 set via the other slot — keeps the picker visible.
-  }
-
-  for (let i = 0; i < R16_TREE.length; i++) {
-    const [a, b] = R16_TREE[i];
-    const ta = state.R32[a];
-    const tb = state.R32[b];
-    if (ta != null && qfSet.has(ta)) state.R16[i] = ta;
-    else if (tb != null && qfSet.has(tb)) state.R16[i] = tb;
-  }
-  for (let i = 0; i < QF_TREE.length; i++) {
-    const [a, b] = QF_TREE[i];
-    const ta = state.R16[a];
-    const tb = state.R16[b];
-    if (ta != null && sfSet.has(ta)) state.QF[i] = ta;
-    else if (tb != null && sfSet.has(tb)) state.QF[i] = tb;
-  }
-  for (let i = 0; i < SF_TREE.length; i++) {
-    const [a, b] = SF_TREE[i];
-    const ta = state.QF[a];
-    const tb = state.QF[b];
-    if (ta != null && finalSet.has(ta)) state.SF[i] = ta;
-    else if (tb != null && finalSet.has(tb)) state.SF[i] = tb;
-  }
-  state.F[0] = sets.WINNER?.[0] ?? null;
-  return state;
-}
-
 type DragPayload = { teamId: number; from: number | "pool" };
 
 function GroupCard({
@@ -546,6 +484,7 @@ function GroupCard({
   onChange,
   onClear,
   locked,
+  lockAt,
 }: {
   letter: string;
   teams: Team[];
@@ -553,6 +492,7 @@ function GroupCard({
   onChange: (slotIdx: number, val: number | null) => void;
   onClear: () => void;
   locked: boolean;
+  lockAt: string | null;
 }) {
   const [dragOver, setDragOver] = useState<number | "pool" | null>(null);
 
@@ -631,11 +571,7 @@ function GroupCard({
           Group {letter}
         </h3>
         <div className="flex items-center gap-2">
-          {locked && (
-            <span className="mono rounded-full bg-surface-high px-2 py-0.5 text-[9px] uppercase tracking-wider text-on-surface-variant">
-              Locked
-            </span>
-          )}
+          <LockCountdown lockAt={lockAt} locked={locked} />
           {!locked && anyPicked && (
             <button
               onClick={onClear}

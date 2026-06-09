@@ -83,9 +83,6 @@ notepad .env.local
 Fill in:
 
 - `DATABASE_URL` — the Supabase URI from step 2.
-- `ADMIN_USERNAME` — the username **you** will sign up with (lowercase, e.g.
-  `eray`). Whoever signs up with this exact username becomes the admin. Nobody
-  else can become admin by signing up.
 - `FOOTBALL_DATA_TOKEN` — your token from football-data.org. Server-only,
   never exposed to the browser. If you leave it blank the app still runs, but
   fixtures and results won't auto-update — you'd be entering everything by
@@ -109,8 +106,14 @@ automatically.
 npm run dev
 ```
 
-Open http://localhost:3000. Sign up with the username you set as
-`ADMIN_USERNAME` — you'll now see an **Admin** link in the nav. Hitting most
+Open http://localhost:3000. Sign up to create your account, then promote
+yourself to admin from another terminal:
+
+```powershell
+npm run make-admin <your-username>
+```
+
+Refresh the page — you'll now see an **Admin** link in the nav. Hitting most
 pages will lazily kick off a background sync from football-data.org (rate
 limited, non-blocking), so within a minute or two the real fixture data
 should appear.
@@ -140,8 +143,8 @@ The local setup above works for a LAN party. To put it on the internet:
 1. Push the repo to GitHub (private is fine).
 2. Go to https://vercel.com/new → import the repo. Framework: **Next.js**
    (auto-detected, no build setting changes needed).
-3. Under **Environment Variables**, add the same `DATABASE_URL`,
-   `ADMIN_USERNAME`, and `FOOTBALL_DATA_TOKEN` you used locally.
+3. Under **Environment Variables**, add the same `DATABASE_URL` and
+   `FOOTBALL_DATA_TOKEN` you used locally.
 4. Click **Deploy**. You'll get a URL like `https://wc-predictions-xyz.vercel.app`
    — send it to your friends.
 

@@ -1,11 +1,63 @@
 import "./globals.css";
+import type { Metadata, Viewport } from "next";
 import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, formatHandle } from "@/lib/auth";
 import { NavLink, MobileNavLink } from "@/components/NavLink";
+import { SITE_URL, SITE_NAME, SITE_DESCRIPTION } from "@/lib/site";
 
-export const metadata = {
-  title: "Hexet WC Predictions",
-  description: "Predict the 2026 World Cup with friends.",
+export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: `${SITE_NAME} · 2026 FIFA World Cup Predictions`,
+    template: `%s · ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  keywords: [
+    "World Cup 2026",
+    "FIFA World Cup",
+    "world cup prediction",
+    "world cup predictions",
+    "prediction league",
+    "football predictions",
+    "soccer predictions",
+    "bracket challenge",
+    "fantasy football",
+    "private league",
+  ],
+  authors: [{ name: SITE_NAME }],
+  alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    siteName: SITE_NAME,
+    title: `${SITE_NAME} · 2026 FIFA World Cup Predictions`,
+    description: SITE_DESCRIPTION,
+    url: "/",
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${SITE_NAME} · 2026 FIFA World Cup Predictions`,
+    description: SITE_DESCRIPTION,
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+    },
+  },
+  category: "sports",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0a",
+  colorScheme: "dark",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export const dynamic = "force-dynamic";
@@ -21,18 +73,22 @@ export default async function RootLayout({
       <body className="font-body bg-background text-on-background min-h-screen">
         <header className="fixed top-4 left-1/2 z-50 flex h-16 w-[calc(100%-2rem)] max-w-[1200px] -translate-x-1/2 items-center justify-between rounded-full border border-outline-variant/40 bg-surface-lowest px-6 shadow-floating">
           <Link href="/" className="display-italic text-xl uppercase tracking-tighter text-white">
-            Hexet <span className="text-secondary">WC</span> Predictions
+            <span className="text-secondary">WC</span> Prediction League
           </Link>
           <nav className="hidden items-center gap-8 md:flex">
             <NavLink href="/predict">Predict</NavLink>
-            <NavLink href="/">Leaderboard</NavLink>
+            <NavLink href="/">Leagues</NavLink>
+            {user && <NavLink href="/profile">Profile</NavLink>}
             {user?.is_admin && <NavLink href="/admin" accent>Admin</NavLink>}
           </nav>
           <div className="flex items-center gap-3">
             {user ? (
               <form action="/api/auth/logout" method="post" className="flex items-center gap-3">
-                <span className="hidden text-sm text-on-surface-variant sm:inline">
-                  {user.display_name}
+                <span className="hidden text-sm text-on-surface-variant sm:flex sm:flex-col sm:items-end sm:leading-tight">
+                  <span>{user.display_name}</span>
+                  <span className="mono text-[10px] text-on-surface-variant/70">
+                    {formatHandle(user)}
+                  </span>
                 </span>
                 <button className="rounded-full border border-outline-variant/40 px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-on-surface-variant hover:bg-surface-high hover:text-on-surface">
                   Logout
@@ -59,8 +115,9 @@ export default async function RootLayout({
 
         {/* Mobile nav */}
         <nav className="fixed bottom-0 left-0 z-50 flex h-16 w-full items-center justify-around border-t border-outline-variant/40 bg-surface-lowest px-4 md:hidden">
-          <MobileNavLink href="/" label="Board" />
+          <MobileNavLink href="/" label="Leagues" />
           <MobileNavLink href="/predict" label="Predict" />
+          {user && <MobileNavLink href="/profile" label="Profile" />}
           {user?.is_admin && <MobileNavLink href="/admin" label="Admin" />}
         </nav>
 

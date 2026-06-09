@@ -1,8 +1,22 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { login, getCurrentUser } from "@/lib/auth";
 import SubmitButton from "@/components/SubmitButton";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Sign in",
+  description:
+    "Sign in to WC Prediction League to enter scores, fill out your bracket, and track your friends-league leaderboard for the 2026 FIFA World Cup.",
+  alternates: { canonical: "/login" },
+  openGraph: {
+    title: "Sign in · WC Prediction League",
+    description:
+      "Sign in to predict the 2026 FIFA World Cup with your friends.",
+    url: "/login",
+  },
+};
 
 export default async function LoginPage({
   searchParams,
@@ -43,12 +57,13 @@ export default async function LoginPage({
         <form action={action} className="space-y-4">
           <label className="block">
             <span className="mono text-[10px] uppercase tracking-wider text-on-surface-variant">
-              Username
+              Handle (name or name#1234)
             </span>
             <input
               name="username"
               required
               autoComplete="username"
+              placeholder="name#1234"
               className="mt-1 block w-full rounded-lg border border-outline-variant/40 bg-surface-low px-3 py-2.5 text-sm focus:border-secondary focus:outline-none"
             />
           </label>

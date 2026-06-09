@@ -7,6 +7,7 @@ import AdminBracketResults from "./AdminBracketResults";
 import AdminAddMatch from "./AdminAddMatch";
 import AdminSync from "./AdminSync";
 import AdminDemoToggle from "./AdminDemoToggle";
+import AdminLeagueDemoToggle from "./AdminLeagueDemoToggle";
 import { readSyncState } from "@/lib/autoSync";
 import { cookies } from "next/headers";
 
@@ -52,7 +53,9 @@ export default async function AdminPage() {
     SELECT stage, team_id FROM bracket_results
   `;
   const syncState = await readSyncState();
-  const showDemo = (await cookies()).get("match_demo")?.value === "1";
+  const jar = await cookies();
+  const showDemo = jar.get("match_demo")?.value === "1";
+  const showLeaguesDemo = jar.get("leagues_demo")?.value === "1";
 
   return (
     <div className="space-y-12">
@@ -70,7 +73,10 @@ export default async function AdminPage() {
       </Section>
 
       <Section title="Preview">
-        <AdminDemoToggle initial={showDemo} />
+        <div className="space-y-3">
+          <AdminDemoToggle initial={showDemo} />
+          <AdminLeagueDemoToggle initial={showLeaguesDemo} />
+        </div>
       </Section>
 
       <Section title="Match results">

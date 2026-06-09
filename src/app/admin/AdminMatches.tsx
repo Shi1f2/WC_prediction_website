@@ -79,7 +79,7 @@ function Row({ m }: { m: M }) {
         <span className="text-on-surface-variant">vs</span>{" "}
         <span className="font-bold uppercase">{tb}</span>
         <span className="ml-2 text-xs text-on-surface-variant">
-          {new Date(m.kickoff_at).toLocaleString()}
+          {new Date(m.kickoff_at).toLocaleString("en-GB")}
         </span>
       </div>
       <div className="mono flex items-center gap-1">

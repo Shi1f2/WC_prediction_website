@@ -2,9 +2,8 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { sql } from "@/lib/db";
 import { isValidMarketPick } from "@/lib/markets";
-import { FORCE_OPEN_FIRST_MATCH } from "@/lib/featureFlags";
 
-const OPEN_WINDOW_MS = 36 * 60 * 60 * 1000;
+const OPEN_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 type BetBody = {
   match_id?: unknown;
@@ -96,19 +95,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Locked — kickoff passed" }, { status: 403 });
 
   if (msUntil > OPEN_WINDOW_MS) {
-    let isFirst = false;
-    if (FORCE_OPEN_FIRST_MATCH) {
-      const first = await sql<{ id: number }[]>`
-        SELECT id FROM matches ORDER BY kickoff_at, id LIMIT 1
-      `;
-      isFirst = first[0]?.id === matchId;
-    }
-    if (!isFirst) {
-      return NextResponse.json(
-        { error: "Not open yet — opens 36h before kickoff" },
-        { status: 403 },
-      );
-    }
+    return NextResponse.json(
+      { error: "Not open yet — opens 48h before kickoff" },
+      { status: 403 },
+    );
   }
 
   // One-shot submission: reject if the user has any existing pick (score or

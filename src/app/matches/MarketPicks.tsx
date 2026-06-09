@@ -5,7 +5,6 @@ import {
   type MarketDef,
   type MarketOption,
   correctPick,
-  gradeMarket,
 } from "@/lib/markets";
 
 type Props = {
@@ -18,6 +17,14 @@ type Props = {
   onChange?: (market: string, pick: string | null) => void;
   readOnly: boolean;
   hideIfEmpty?: boolean;
+  // Combined-bet total to show in the header (exact-score + every market
+  // pick). Computed in MatchRow because exact-score lives there. Null = hide.
+  accumulated?: {
+    total: number;
+    exactPart: number | null;
+    marketPart: number;
+    isLive: boolean;
+  } | null;
 };
 
 // Some option labels in the market catalog use the placeholder "A" / "B" for
@@ -37,6 +44,7 @@ export default function MarketPicks({
   onChange,
   readOnly,
   hideIfEmpty = false,
+  accumulated = null,
 }: Props) {
   function togglePick(market: MarketDef, opt: MarketOption) {
     if (readOnly || !onChange) return;
@@ -44,38 +52,40 @@ export default function MarketPicks({
     onChange(market.id, current === opt.value ? null : opt.value);
   }
 
-  // Total points earned from market picks for this match (final results only).
-  const earnedTotal =
-    isFinal && actualA != null && actualB != null
-      ? Object.entries(picks).reduce(
-          (sum, [m, p]) => sum + gradeMarket(m, p, actualA, actualB),
-          0,
-        )
-      : null;
-
   if (hideIfEmpty && Object.keys(picks).length === 0) return null;
+
+  const totalSign = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `${n}` : "0");
 
   return (
     <div className="mt-3 border-t border-outline-variant/20 pt-3">
-      <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
         <span>
-          Extra picks · {readOnly ? "locked in" : "win or lose points"}
+          Market bets · {readOnly ? "locked in" : "win or lose points"}
         </span>
-        {earnedTotal != null && (
-          <span
-            className={`mono rounded-full px-2 py-0.5 ${
-              earnedTotal > 0
-                ? "bg-secondary/20 text-secondary"
-                : earnedTotal < 0
-                  ? "bg-error/20 text-error"
-                  : "bg-surface-high text-on-surface-variant"
-            }`}
-          >
-            {earnedTotal > 0
-              ? `+${earnedTotal} bonus`
-              : earnedTotal < 0
-                ? `${earnedTotal} bonus`
-                : "0 bonus"}
+        {accumulated && (
+          <span className="flex flex-wrap items-center gap-2">
+            <span
+              className={`mono rounded-full px-2 py-0.5 ${
+                accumulated.total > 0
+                  ? accumulated.isLive
+                    ? "bg-secondary/20 text-secondary"
+                    : "bg-primary/20 text-primary"
+                  : accumulated.total < 0
+                    ? "bg-error/20 text-error"
+                    : "bg-surface-high text-on-surface-variant"
+              }`}
+            >
+              {totalSign(accumulated.total)} pts
+              {accumulated.isLive ? " so far" : " total"}
+            </span>
+            <span className="mono normal-case text-on-surface-variant">
+              score{" "}
+              {accumulated.exactPart == null
+                ? "—"
+                : totalSign(accumulated.exactPart)}
+              {" · "}
+              markets {totalSign(accumulated.marketPart)}
+            </span>
           </span>
         )}
       </div>
@@ -103,7 +113,7 @@ export default function MarketPicks({
                   const isWinner = winner === opt.value;
                   const isLoser =
                     isFinal && isPicked && winner != null && winner !== opt.value;
-                  const dimmed = readOnly && !isPicked && !(isFinal && isWinner);
+                  const dimmed = readOnly && !isPicked;
                   return (
                     <button
                       key={opt.value}
@@ -118,16 +128,40 @@ export default function MarketPicks({
                             : isWinner
                               ? "border-primary/60 bg-primary/20 text-primary"
                               : "border-secondary bg-secondary/20 text-secondary"
-                          : isFinal && isWinner
-                            ? "border-primary/40 bg-primary/5 text-primary/80"
-                            : "border-outline-variant/40 text-on-surface-variant hover:border-secondary/50 hover:text-on-surface"
+                          : "border-outline-variant/40 text-on-surface-variant hover:border-secondary/50 hover:text-on-surface"
                       } ${dimmed ? "opacity-40" : ""} disabled:cursor-default`}
                     >
                       <span>{teamizeLabel(opt.label, teamA, teamB)}</span>
-                      <span className="opacity-50">·</span>
-                      <span className="text-primary/90">+{opt.points}</span>
-                      <span className="opacity-40">/</span>
-                      <span className="text-error/90">−{opt.points}</span>
+                      {isFinal && isPicked ? (
+                        // On finalized matches, the picked pill shows the
+                        // actual gain/loss — colors already carry win/lose.
+                        <>
+                          <span className="opacity-50">·</span>
+                          <span className="font-extrabold">
+                            {isWinner ? `+${opt.points}` : `−${opt.points}`}
+                          </span>
+                        </>
+                      ) : readOnly ? (
+                        // Locked-in but match not finished yet: no numbers on
+                        // unpicked pills — they're reference only.
+                        isPicked ? (
+                          <>
+                            <span className="opacity-50">·</span>
+                            <span className="text-primary/90">+{opt.points}</span>
+                            <span className="opacity-40">/</span>
+                            <span className="text-error/90">−{opt.points}</span>
+                          </>
+                        ) : null
+                      ) : (
+                        // Editing mode: show stake on every pill so the user
+                        // can compare options before clicking.
+                        <>
+                          <span className="opacity-50">·</span>
+                          <span className="text-primary/90">+{opt.points}</span>
+                          <span className="opacity-40">/</span>
+                          <span className="text-error/90">−{opt.points}</span>
+                        </>
+                      )}
                     </button>
                   );
                 })}

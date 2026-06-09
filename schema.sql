@@ -4,11 +4,13 @@
 
 CREATE TABLE IF NOT EXISTS users (
   id            SERIAL PRIMARY KEY,
-  username      TEXT UNIQUE NOT NULL,
+  username      TEXT NOT NULL,
+  discriminator CHAR(4) NOT NULL,
   display_name  TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   is_admin      BOOLEAN NOT NULL DEFAULT false,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT users_handle_key UNIQUE (username, discriminator)
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -90,3 +92,29 @@ CREATE TABLE IF NOT EXISTS bracket_results (
 
 CREATE INDEX IF NOT EXISTS idx_matches_kickoff ON matches(kickoff_at);
 CREATE INDEX IF NOT EXISTS idx_match_preds_user ON match_predictions(user_id);
+
+CREATE TABLE IF NOT EXISTS leagues (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  owner_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS league_members (
+  league_id   INTEGER NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (league_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS league_invites (
+  id          SERIAL PRIMARY KEY,
+  league_id   INTEGER NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+  inviter_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  invitee_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (league_id, invitee_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_league_members_user    ON league_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_league_invites_invitee ON league_invites(invitee_id);

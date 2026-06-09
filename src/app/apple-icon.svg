@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <rect width="180" height="180" rx="40" fill="#000000"/>
+  <circle cx="90" cy="90" r="54" fill="none" stroke="#ffffff" stroke-width="6"/>
+  <text x="90" y="112" text-anchor="middle"
+        font-family="Arial Black, Helvetica, sans-serif"
+        font-weight="900" font-style="italic"
+        font-size="64" fill="#ffd700"
+        letter-spacing="-3">WC</text>
+</svg>
