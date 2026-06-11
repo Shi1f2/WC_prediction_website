@@ -1,4 +1,5 @@
 import { sql } from "@/lib/db";
+import { cookies } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import BoardClient from "@/components/BoardClient";
@@ -10,6 +11,9 @@ export const dynamic = "force-dynamic";
 export default async function BoardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const previewAllResolved =
+    (await cookies()).get("leaderboard_preview")?.value === "1";
 
   const committedRows = await sql<{ bracket_committed_at: Date | null }[]>`
     SELECT bracket_committed_at FROM users WHERE id = ${user.id}
@@ -132,6 +136,7 @@ export default async function BoardPage() {
         bracketLocked={bracketLocked}
         bracketLockAt={bracketLockAt}
         bracketCommittedAt={bracketCommittedAt}
+        previewAllResolved={previewAllResolved}
       />
     </div>
   );

@@ -12,6 +12,17 @@ import {
   slotLabel,
   type SlotRef,
 } from "@/lib/bracketStructure";
+import { POINTS } from "@/lib/matchScore";
+
+// Per-match award when a winner is picked in this round. Mirrors scoring.ts:
+// the R32 winner advances to R16, so it scores POINTS.bracket.R16, etc.
+const ROUND_AWARD: Record<Round, number> = {
+  R32: POINTS.bracket.R16,
+  R16: POINTS.bracket.QF,
+  QF: POINTS.bracket.SF,
+  SF: POINTS.bracket.FINAL,
+  F: POINTS.bracket.WINNER,
+};
 
 export type Team = {
   id: number;
@@ -70,6 +81,8 @@ export default function Bracket2026({
   onReset,
   saveStatus,
   pending,
+  previewAllResolved = false,
+  previewCorrectByRound,
 }: {
   teamsByGroup: Record<string, Team[]>;
   groupPicks: GroupPicks;
@@ -81,6 +94,10 @@ export default function Bracket2026({
   onReset: () => void;
   saveStatus: "idle" | "saving" | "saved" | "error";
   pending: boolean;
+  previewAllResolved?: boolean;
+  // Per-round set of match indexes whose winner-pick counts as "correct" in
+  // the preview, vs. just filled. Lets each card render a gold +X or grey +0.
+  previewCorrectByRound?: Record<Round, Set<number>>;
 }) {
   const teamById = useMemo(() => {
     const m = new Map<number, Team>();
@@ -252,7 +269,25 @@ export default function Bracket2026({
       >
         <div className="mono flex items-center justify-between bg-surface-container px-2 py-1 text-[9px] uppercase tracking-widest text-on-surface-variant">
           <span>R32 · {matchIdx + 1}</span>
-          {winnerId && <span className="text-primary">●</span>}
+          <span className="flex items-center gap-1.5">
+            {previewAllResolved && (() => {
+              const correct =
+                !!winnerId &&
+                (previewCorrectByRound?.R32?.has(matchIdx) ?? false);
+              return (
+                <span
+                  className={`mono rounded-full px-1.5 py-0.5 text-[8px] font-bold tracking-wider ${
+                    correct
+                      ? "bg-secondary/25 text-secondary"
+                      : "bg-surface-high text-on-surface-variant"
+                  }`}
+                >
+                  +{correct ? ROUND_AWARD.R32 : 0}
+                </span>
+              );
+            })()}
+            {winnerId && <span className="text-primary">●</span>}
+          </span>
         </div>
         <TeamButton
           team={leftTeam}
@@ -325,7 +360,25 @@ export default function Bracket2026({
       >
         <div className="mono flex items-center justify-between bg-surface-container px-2 py-1 text-[9px] uppercase tracking-widest text-on-surface-variant">
           <span>{label}</span>
-          {winnerId && <span className="text-primary">●</span>}
+          <span className="flex items-center gap-1.5">
+            {previewAllResolved && (() => {
+              const correct =
+                !!winnerId &&
+                (previewCorrectByRound?.[round]?.has(matchIdx) ?? false);
+              return (
+                <span
+                  className={`mono rounded-full px-1.5 py-0.5 text-[8px] font-bold tracking-wider ${
+                    correct
+                      ? "bg-secondary/25 text-secondary"
+                      : "bg-surface-high text-on-surface-variant"
+                  }`}
+                >
+                  +{correct ? ROUND_AWARD[round] : 0}
+                </span>
+              );
+            })()}
+            {winnerId && <span className="text-primary">●</span>}
+          </span>
         </div>
         <TeamButton
           team={a}

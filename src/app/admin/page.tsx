@@ -8,6 +8,7 @@ import AdminAddMatch from "./AdminAddMatch";
 import AdminSync from "./AdminSync";
 import AdminDemoToggle from "./AdminDemoToggle";
 import AdminLeagueDemoToggle from "./AdminLeagueDemoToggle";
+import AdminLeaderboardPreviewToggle from "./AdminLeaderboardPreviewToggle";
 import { readSyncState } from "@/lib/autoSync";
 import { cookies } from "next/headers";
 
@@ -56,6 +57,7 @@ export default async function AdminPage() {
   const jar = await cookies();
   const showDemo = jar.get("match_demo")?.value === "1";
   const showLeaguesDemo = jar.get("leagues_demo")?.value === "1";
+  const previewLeaderboard = jar.get("leaderboard_preview")?.value === "1";
 
   return (
     <div className="space-y-12">
@@ -76,6 +78,7 @@ export default async function AdminPage() {
         <div className="space-y-3">
           <AdminDemoToggle initial={showDemo} />
           <AdminLeagueDemoToggle initial={showLeaguesDemo} />
+          <AdminLeaderboardPreviewToggle initial={previewLeaderboard} />
         </div>
       </Section>
 

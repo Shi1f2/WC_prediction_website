@@ -9,6 +9,7 @@ import Bracket2026, {
 } from "./Bracket2026";
 import { reconstructBracketFromSets } from "@/lib/bracketReconstruct";
 import LockCountdown from "./LockCountdown";
+import { POINTS } from "@/lib/matchScore";
 
 type Team = {
   id: number;
@@ -29,6 +30,7 @@ export default function BoardClient({
   bracketLocked,
   bracketLockAt,
   bracketCommittedAt,
+  previewAllResolved = false,
 }: {
   userId: number;
   allTeams: Team[];
@@ -43,6 +45,7 @@ export default function BoardClient({
   bracketLocked: boolean;
   bracketLockAt: string | null;
   bracketCommittedAt?: string | null;
+  previewAllResolved?: boolean;
 }) {
   const storageKey = `wc_board_state_v1_user_${userId}`;
   const [picks, setPicks] = useState<GroupPicks>(initialGroupPicks);
@@ -156,6 +159,95 @@ export default function BoardClient({
     }
     return s;
   }, [picks]);
+
+  // Preview-mode points: hardcoded "test" fake-results so the admin can see
+  // what a realistic mixed outcome looks like in the UI, without needing real
+  // group_results / bracket_results entered. The rule baked in here is:
+  //
+  //   - Groups with an even index in alphabetical order (A, C, E, G, I, K) →
+  //     both picks "right" (8 pts/group)
+  //   - Groups with an odd index (B, D, F, H, J, L) → only pick #1 lands in
+  //     top-2 wrong order (2 pts/group)
+  //   - For each bracket round, the first half of filled picks "score", the
+  //     rest don't. Roughly half-credit per round.
+  //
+  // Swap these heuristics for real data once group_results / bracket_results
+  // are wired up.
+  const previewPerGroupPts = useMemo(() => {
+    const out: Record<string, number> = {};
+    const sortedLetters = [...Object.keys(picks)].sort();
+    sortedLetters.forEach((letter, i) => {
+      const arr = picks[letter] ?? [];
+      const has1 = arr[0] != null;
+      const has2 = arr[1] != null;
+      let pts = 0;
+      if (i % 2 === 0) {
+        // "Even" group — pretend both picks were exactly right.
+        if (has1) pts += POINTS.groupPositionExact;
+        if (has2) pts += POINTS.groupPositionExact;
+      } else {
+        // "Odd" group — only pick #1 lands in the top-2 (wrong order).
+        if (has1) pts += POINTS.groupTopTwoAnyOrder;
+      }
+      out[letter] = pts;
+    });
+    return out;
+  }, [picks]);
+
+  const previewGroupPts = useMemo(
+    () => Object.values(previewPerGroupPts).reduce((a, b) => a + b, 0),
+    [previewPerGroupPts],
+  );
+
+  // Bracket save layout: state.R32 winners → DB stage "R16", etc. Each round
+  // counts the first half of its filled picks as "correct" for the demo.
+  const previewBracketBreakdown = useMemo(() => {
+    const half = (arr: (number | null)[]) => {
+      const filled = arr.filter((x) => x != null).length;
+      return Math.ceil(filled / 2);
+    };
+    return {
+      R16: half(bracket.R32) * POINTS.bracket.R16,
+      QF: half(bracket.R16) * POINTS.bracket.QF,
+      SF: half(bracket.QF) * POINTS.bracket.SF,
+      FINAL: half(bracket.SF) * POINTS.bracket.FINAL,
+      // Single-slot stage: either correct or not. Demo flips it heads.
+      WINNER: bracket.F[0] != null ? POINTS.bracket.WINNER : 0,
+    };
+  }, [bracket]);
+
+  const previewBracketPts = useMemo(
+    () =>
+      previewBracketBreakdown.R16 +
+      previewBracketBreakdown.QF +
+      previewBracketBreakdown.SF +
+      previewBracketBreakdown.FINAL +
+      previewBracketBreakdown.WINNER,
+    [previewBracketBreakdown],
+  );
+
+  const previewTotalPts = previewGroupPts + previewBracketPts;
+
+  // Per-round set of matchIdx values that "scored" in the demo. Bracket2026
+  // uses these to color each card's badge gold (correct) vs. grey (filled
+  // but wrong). The "first half of filled picks counts" rule matches the
+  // totals computed above, so per-card + section header + banner all agree.
+  const previewCorrectByRound = useMemo(() => {
+    const pick = (arr: (number | null)[]) => {
+      const filledIdx = arr
+        .map((v, i) => (v != null ? i : -1))
+        .filter((i) => i >= 0);
+      const winners = filledIdx.slice(0, Math.ceil(filledIdx.length / 2));
+      return new Set(winners);
+    };
+    return {
+      R32: pick(bracket.R32),
+      R16: pick(bracket.R16),
+      QF: pick(bracket.QF),
+      SF: pick(bracket.SF),
+      F: bracket.F[0] != null ? new Set([0]) : new Set<number>(),
+    } as Record<"R32" | "R16" | "QF" | "SF" | "F", Set<number>>;
+  }, [bracket]);
 
   const bracketTeams = useMemo(
     () => allTeams.filter((t) => advancing.has(t.id)),
@@ -337,6 +429,54 @@ export default function BoardClient({
 
   return (
     <div className="space-y-8">
+      {previewAllResolved && (
+        <section className="glass-card rounded-2xl border border-secondary/60 bg-secondary/10 p-5">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
+            <h2 className="display-italic text-xl uppercase text-secondary">
+              Preview · if every pick resolves correctly
+            </h2>
+            <span className="mono text-[10px] uppercase tracking-wider text-secondary">
+              disable from /admin → Preview
+            </span>
+          </div>
+          <div className="grid gap-3 text-sm sm:grid-cols-3">
+            <div className="rounded-lg bg-surface-low/60 px-3 py-2">
+              <div className="mono text-[10px] uppercase tracking-wider text-on-surface-variant">
+                Group points
+              </div>
+              <div className="mono text-2xl font-bold text-secondary">
+                +{previewGroupPts}
+              </div>
+              <div className="mono text-[10px] text-on-surface-variant">
+                {POINTS.groupPositionExact} pts × each filled 1st/2nd
+              </div>
+            </div>
+            <div className="rounded-lg bg-surface-low/60 px-3 py-2">
+              <div className="mono text-[10px] uppercase tracking-wider text-on-surface-variant">
+                Bracket points
+              </div>
+              <div className="mono text-2xl font-bold text-secondary">
+                +{previewBracketPts}
+              </div>
+              <div className="mono text-[10px] text-on-surface-variant">
+                R16 +{previewBracketBreakdown.R16} · QF +{previewBracketBreakdown.QF} · SF +{previewBracketBreakdown.SF} · F +{previewBracketBreakdown.FINAL} · W +{previewBracketBreakdown.WINNER}
+              </div>
+            </div>
+            <div className="rounded-lg bg-secondary/15 px-3 py-2">
+              <div className="mono text-[10px] uppercase tracking-wider text-on-surface-variant">
+                Total projected
+              </div>
+              <div className="mono text-2xl font-bold text-secondary">
+                +{previewTotalPts}
+              </div>
+              <div className="mono text-[10px] text-on-surface-variant">
+                added to your match points on the leaderboard
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className="glass-card rounded-2xl border border-outline-variant/30 p-5">
         <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
           <h2 className="display-italic text-2xl uppercase text-secondary">
@@ -365,6 +505,7 @@ export default function BoardClient({
               onClear={() => clearGroup(letter)}
               locked={locked || committed}
               lockAt={lockAt}
+              previewPts={previewAllResolved ? previewPerGroupPts[letter] ?? 0 : null}
             />
           ))}
         </div>
@@ -376,6 +517,11 @@ export default function BoardClient({
             Knockout Bracket
           </h2>
           <div className="flex flex-wrap items-center gap-3">
+            {previewAllResolved && (
+              <span className="mono rounded-full bg-secondary/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-secondary">
+                +{previewBracketPts} pts if perfect
+              </span>
+            )}
             <LockCountdown
               lockAt={bracketLockAt}
               locked={effectiveBracketLocked}
@@ -399,6 +545,8 @@ export default function BoardClient({
               saveStatus={bracketStatus}
               pending={bracketPending}
               locked={effectiveBracketLocked}
+              previewAllResolved={previewAllResolved}
+              previewCorrectByRound={previewCorrectByRound}
             />
           </div>
         </Canvas>
@@ -504,6 +652,7 @@ function GroupCard({
   onClear,
   locked,
   lockAt,
+  previewPts,
 }: {
   letter: string;
   teams: Team[];
@@ -512,6 +661,7 @@ function GroupCard({
   onClear: () => void;
   locked: boolean;
   lockAt: string | null;
+  previewPts: number | null;
 }) {
   const [dragOver, setDragOver] = useState<number | "pool" | null>(null);
 
@@ -590,6 +740,17 @@ function GroupCard({
           Group {letter}
         </h3>
         <div className="flex items-center gap-2">
+          {previewPts != null && (
+            <span
+              className={`mono rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
+                previewPts > 0
+                  ? "bg-secondary/25 text-secondary"
+                  : "bg-surface-high text-on-surface-variant"
+              }`}
+            >
+              +{previewPts}
+            </span>
+          )}
           <LockCountdown lockAt={lockAt} locked={locked} />
           {!locked && anyPicked && (
             <button
