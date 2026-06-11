@@ -121,6 +121,13 @@ export default function MarketPicks({
                       onClick={() => togglePick(market, opt)}
                       disabled={readOnly}
                       title={`${opt.label} — win +${opt.points} / lose −${opt.points}`}
+                      // Form-filler extensions (LastPass, Bitwarden, 1Password,
+                      // Norton, etc.) inject a `fdprocessedid` attribute onto
+                      // every <button> in the DOM before React hydrates. That
+                      // produces a hydration mismatch warning even though
+                      // nothing in our code is wrong. Suppressing it on the
+                      // button is the standard escape hatch.
+                      suppressHydrationWarning
                       className={`mono inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider transition-colors ${
                         isPicked
                           ? isLoser

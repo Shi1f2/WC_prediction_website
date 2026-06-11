@@ -1,16 +1,23 @@
-// Shared sync logic — called from both the admin "Sync" buttons and the
-// lazy auto-sync that fires on page renders.
+// Score-only sync.
+//
+// We don't sync teams or insert new matches anymore — the seed file owns the
+// 48 WC team rows and the 104 fixtures, and the admin can hand-edit anything
+// else. All this module does is: pull live event scores from thesportsdb,
+// match them against existing match rows by (team-A name, team-B name, kickoff
+// date), and UPDATE the score/status/minute. Rows with manual_override = TRUE
+// are never touched.
 
 import { sql } from "@/lib/db";
 import {
+  fetchLiveWcMatches,
   fetchWcMatches,
-  fetchWcTeams,
-  mapGroupLetter,
-  mapStage,
   teamNameMatches,
-  type ApiTeam,
+  type ApiMatch,
 } from "@/lib/footballData";
 
+// Report shapes preserved so AdminSync.tsx can keep rendering them as-is. The
+// team counters always come back as zero; the matches counters carry the
+// actual story.
 export type TeamSyncReport = {
   api_count: number;
   inserted: number;
@@ -36,294 +43,170 @@ export type ResultsSyncReport = {
   not_linked: number[];
 };
 
-type TeamRow = {
-  id: number;
-  name: string;
-  code: string;
-  flag: string;
-  group_letter: string | null;
-  api_team_id: number | null;
+const EMPTY_TEAM_REPORT: TeamSyncReport = {
+  api_count: 0,
+  inserted: 0,
+  linked: 0,
+  updated: 0,
+  orphans: [],
 };
 
-function flagFromTla(tla: string | null): string {
-  const t = (tla ?? "").toUpperCase();
-  const overrides: Record<string, string> = {
-    ENG: "gb-eng", SCO: "gb-sct", WAL: "gb-wls", NIR: "gb-nir",
-    USA: "us", RSA: "za", KSA: "sa", UAE: "ae", KOR: "kr", PRK: "kp",
-    GER: "de", NED: "nl", SUI: "ch", DEN: "dk", SWE: "se", NOR: "no",
-    POR: "pt", ESP: "es", FRA: "fr", ITA: "it", BEL: "be", AUT: "at",
-    CRO: "hr", CZE: "cz", POL: "pl", SVN: "si", SVK: "sk", UKR: "ua",
-    BIH: "ba", MNE: "me", MKD: "mk", SRB: "rs", ROU: "ro", BUL: "bg",
-    GRE: "gr", ALB: "al", TUR: "tr", URY: "uy", PAR: "py", ARG: "ar",
-    BRA: "br", CHI: "cl", COL: "co", VEN: "ve", PER: "pe", BOL: "bo",
-    ECU: "ec", MEX: "mx", CAN: "ca", CRC: "cr", HON: "hn", SLV: "sv",
-    GUA: "gt", PAN: "pa", JAM: "jm", HAI: "ht", CUW: "cw", TRI: "tt",
-    JPN: "jp", AUS: "au", NZL: "nz", IRN: "ir", IRQ: "iq", JOR: "jo",
-    QAT: "qa", LBN: "lb", SYR: "sy", PLE: "ps", UZB: "uz", KGZ: "kg",
-    TKM: "tm", KAZ: "kz", TJK: "tj", AFG: "af", IND: "in", THA: "th",
-    VIE: "vn", PHI: "ph", IDN: "id", MAS: "my", SGP: "sg", CHN: "cn",
-    HKG: "hk", TPE: "tw", MAR: "ma", ALG: "dz", TUN: "tn", LBY: "ly",
-    EGY: "eg", SDN: "sd", SEN: "sn", CIV: "ci", GHA: "gh", NGA: "ng",
-    CMR: "cm", COD: "cd", CGO: "cg", ANG: "ao", ZAM: "zm", ZIM: "zw",
-    KEN: "ke", UGA: "ug", TAN: "tz", ETH: "et", MLI: "ml", BFA: "bf",
-    GUI: "gn", GAM: "gm", LIB: "lr", SLE: "sl", TOG: "tg", BEN: "bj",
-    NIG: "ne", CPV: "cv", MTN: "mr", GAB: "ga", GNB: "gw", GEQ: "gq",
-    CTA: "cf", CHA: "td", BDI: "bi", RWA: "rw", DJI: "dj", SOM: "so",
-    ERI: "er", MAD: "mg", MWI: "mw", MOZ: "mz", BOT: "bw", LES: "ls",
-    SWZ: "sz", NAM: "na", COM: "km", MRI: "mu", SEY: "sc", STP: "st",
-    ISL: "is", IRL: "ie", FIN: "fi", EST: "ee", LVA: "lv", LTU: "lt",
-    HUN: "hu", LUX: "lu", MLT: "mt", CYP: "cy", AND: "ad", LIE: "li",
-    MON: "mc", SMR: "sm", VAT: "va", BLR: "by", MDA: "md", ARM: "am",
-    AZE: "az", GEO: "ge", ISR: "il",
+type SyncOutcome = {
+  apiCount: number;
+  updated: number;
+  unchanged: number;
+  // API event ids that didn't match any DB row by name+date.
+  unmatched: { api_id: number; home: string; away: string }[];
+};
+
+const LIVE_OR_DONE_STATUSES = new Set([
+  "FINISHED",
+  "AWARDED",
+  "IN_PLAY",
+  "PAUSED",
+  "EXTRA_TIME",
+  "PENALTY_SHOOTOUT",
+]);
+const IN_PLAY_STATUSES = new Set(["IN_PLAY", "EXTRA_TIME"]);
+
+// Workhorse — called by both fixtures and results entry points with a
+// different fetcher (whole season vs. today only).
+async function syncScores(
+  fetcher: () => Promise<ApiMatch[]>,
+): Promise<SyncOutcome> {
+  const apiMatches = await fetcher();
+
+  // Pre-fetch all existing matches with their team names + kickoff. One bulk
+  // SELECT, then everything else is in-memory matching.
+  const dbMatches = await sql<
+    {
+      id: number;
+      kickoff_at: Date;
+      team_a_name: string | null;
+      team_b_name: string | null;
+      manual_override: boolean;
+    }[]
+  >`
+    SELECT m.id, m.kickoff_at,
+           ta.name AS team_a_name, tb.name AS team_b_name,
+           m.manual_override
+    FROM matches m
+    LEFT JOIN teams ta ON ta.id = m.team_a_id
+    LEFT JOIN teams tb ON tb.id = m.team_b_id
+  `;
+
+  // Pre-bucket DB matches by kickoff date (UTC) so each event only scans a
+  // small list. With 104 matches across ~30 days that's ~3-4 per day.
+  const dbByDate = new Map<
+    string,
+    (typeof dbMatches)[number][]
+  >();
+  for (const m of dbMatches) {
+    const day = m.kickoff_at.toISOString().slice(0, 10);
+    let arr = dbByDate.get(day);
+    if (!arr) {
+      arr = [];
+      dbByDate.set(day, arr);
+    }
+    arr.push(m);
+  }
+
+  type UpdatePlan = {
+    id: number;
+    am: ApiMatch;
+    scoreA: number | null;
+    scoreB: number | null;
+    currentMinute: number | null;
+    injuryTime: number | null;
   };
-  if (overrides[t]) return overrides[t];
-  return t.slice(0, 2).toLowerCase();
-}
-
-async function upsertTeams(apiTeams: ApiTeam[]): Promise<TeamSyncReport> {
-  const existing = await sql<TeamRow[]>`
-    SELECT id, name, code, flag, group_letter, api_team_id FROM teams
-  `;
-
-  const byApiId = new Map<number, TeamRow>();
-  for (const t of existing) if (t.api_team_id != null) byApiId.set(t.api_team_id, t);
-
-  let inserted = 0;
-  let linked = 0;
-  let updated = 0;
-
-  for (const at of apiTeams) {
-    const code = at.tla ?? at.name.slice(0, 3).toUpperCase();
-    const flag = flagFromTla(at.tla);
-
-    const linkedRow = byApiId.get(at.id);
-    if (linkedRow) {
-      await sql`
-        UPDATE teams
-        SET name = ${at.name}, code = ${code}, flag = ${flag}
-        WHERE id = ${linkedRow.id}
-      `;
-      updated++;
-      continue;
-    }
-
-    const candidate = existing.find(
-      (e) => e.api_team_id == null && teamNameMatches(at.name, e.name),
-    );
-    if (candidate) {
-      await sql`
-        UPDATE teams
-        SET api_team_id = ${at.id}, code = ${code}, flag = ${flag}
-        WHERE id = ${candidate.id}
-      `;
-      candidate.api_team_id = at.id;
-      byApiId.set(at.id, candidate);
-      linked++;
-      continue;
-    }
-
-    await sql`
-      INSERT INTO teams (name, code, flag, api_team_id)
-      VALUES (${at.name}, ${code}, ${flag}, ${at.id})
-    `;
-    inserted++;
-  }
-
-  const apiIds = new Set(apiTeams.map((t) => t.id));
-  const orphans = existing
-    .filter((e) => e.api_team_id == null)
-    .filter((e) => !apiTeams.some((at) => teamNameMatches(at.name, e.name)))
-    .map((e) => ({ id: e.id, name: e.name, group_letter: e.group_letter }));
-
-  for (const e of existing) {
-    if (e.api_team_id != null && !apiIds.has(e.api_team_id)) {
-      orphans.push({ id: e.id, name: e.name, group_letter: e.group_letter });
-    }
-  }
-
-  return { api_count: apiTeams.length, inserted, linked, updated, orphans };
-}
-
-// 2 API calls (teams + matches).
-export async function runFixturesSync(): Promise<FixturesSyncReport> {
-  const apiTeams = await fetchWcTeams();
-  const teamReport = await upsertTeams(apiTeams);
-
-  const localTeams = await sql<{ id: number; api_team_id: number | null }[]>`
-    SELECT id, api_team_id FROM teams WHERE api_team_id IS NOT NULL
-  `;
-  const localByApi = new Map(
-    localTeams.map((t) => [t.api_team_id as number, t.id]),
-  );
-
-  const apiMatches = await fetchWcMatches();
-
-  let matchesInserted = 0;
-  let matchesUpdated = 0;
-  const matchesSkipped: { api_id: number; reason: string }[] = [];
+  const updates: UpdatePlan[] = [];
+  const unmatched: SyncOutcome["unmatched"] = [];
+  let unchanged = 0;
 
   for (const am of apiMatches) {
-    const homeId = am.homeTeam?.id ? localByApi.get(am.homeTeam.id) : null;
-    const awayId = am.awayTeam?.id ? localByApi.get(am.awayTeam.id) : null;
+    const home = am.homeTeam.name;
+    const away = am.awayTeam.name;
+    if (!home || !away) continue;
 
-    const stage = mapStage(am.stage);
-    const groupLetter = mapGroupLetter(am.group);
-    const liveOrDone =
-      am.status === "FINISHED" ||
-      am.status === "AWARDED" ||
-      am.status === "IN_PLAY" ||
-      am.status === "PAUSED" ||
-      am.status === "EXTRA_TIME" ||
-      am.status === "PENALTY_SHOOTOUT";
+    const apiDay = am.utcDate.slice(0, 10);
+    const candidates = dbByDate.get(apiDay) ?? [];
+    const matched = candidates.find(
+      (m) =>
+        m.team_a_name != null &&
+        m.team_b_name != null &&
+        teamNameMatches(home, m.team_a_name) &&
+        teamNameMatches(away, m.team_b_name),
+    );
+
+    if (!matched) {
+      unmatched.push({ api_id: am.id, home, away });
+      continue;
+    }
+    if (matched.manual_override) {
+      unchanged++;
+      continue;
+    }
+
+    const liveOrDone = LIVE_OR_DONE_STATUSES.has(am.status);
     const scoreA = liveOrDone ? am.score.fullTime.home : null;
     const scoreB = liveOrDone ? am.score.fullTime.away : null;
-    // Only meaningful during in-play; the API omits it (or nulls it) once
-    // the match is paused/finished. Clear it in those cases so a stale
-    // minute can't survive past kickoff.
-    const isInPlay = am.status === "IN_PLAY" || am.status === "EXTRA_TIME";
+    const isInPlay = IN_PLAY_STATUSES.has(am.status);
     const currentMinute = isInPlay ? am.minute ?? null : null;
     const injuryTime = isInPlay ? am.injuryTime ?? null : null;
 
-    if (groupLetter) {
-      if (homeId) {
-        await sql`
-          UPDATE teams SET group_letter = ${groupLetter}
-          WHERE id = ${homeId} AND (group_letter IS DISTINCT FROM ${groupLetter})
-        `;
-      }
-      if (awayId) {
-        await sql`
-          UPDATE teams SET group_letter = ${groupLetter}
-          WHERE id = ${awayId} AND (group_letter IS DISTINCT FROM ${groupLetter})
-        `;
-      }
-    }
-
-    const existing = await sql<{ id: number }[]>`
-      SELECT id FROM matches WHERE api_fixture_id = ${am.id} LIMIT 1
-    `;
-
-    if (existing.length > 0) {
-      await sql`
-        UPDATE matches SET
-          stage = ${stage},
-          group_letter = ${groupLetter},
-          team_a_id = ${homeId ?? null},
-          team_b_id = ${awayId ?? null},
-          kickoff_at = ${am.utcDate},
-          actual_score_a = ${scoreA},
-          actual_score_b = ${scoreB},
-          status = ${am.status},
-          current_minute = ${currentMinute},
-          injury_time = ${injuryTime}
-        WHERE id = ${existing[0].id}
-      `;
-      matchesUpdated++;
-    } else {
-      if (!homeId && !awayId && stage === "group") {
-        matchesSkipped.push({
-          api_id: am.id,
-          reason: "no teams resolved (group stage requires both teams)",
-        });
-        continue;
-      }
-      await sql`
-        INSERT INTO matches
-          (stage, group_letter, team_a_id, team_b_id, kickoff_at,
-           actual_score_a, actual_score_b, api_fixture_id, status,
-           current_minute, injury_time)
-        VALUES
-          (${stage}, ${groupLetter}, ${homeId ?? null}, ${awayId ?? null},
-           ${am.utcDate}, ${scoreA}, ${scoreB}, ${am.id}, ${am.status},
-           ${currentMinute}, ${injuryTime})
-      `;
-      matchesInserted++;
-    }
+    updates.push({ id: matched.id, am, scoreA, scoreB, currentMinute, injuryTime });
   }
 
+  // Parallel UPDATEs — capped to ~5 concurrent by the postgres client pool.
+  await Promise.all(
+    updates.map(async (u) => {
+      await sql`
+        UPDATE matches SET
+          actual_score_a = ${u.scoreA},
+          actual_score_b = ${u.scoreB},
+          status         = ${u.am.status},
+          current_minute = ${u.currentMinute},
+          injury_time    = ${u.injuryTime}
+        WHERE id = ${u.id} AND NOT manual_override
+      `;
+    }),
+  );
+
   return {
-    teams: teamReport,
+    apiCount: apiMatches.length,
+    updated: updates.length,
+    unchanged,
+    unmatched,
+  };
+}
+
+// "Sync fixtures + teams" button — pulls the full season so even matches that
+// aren't today get their scores refreshed. Despite the name, it no longer
+// touches the teams table. Kept for UI compatibility.
+export async function runFixturesSync(): Promise<FixturesSyncReport> {
+  const r = await syncScores(fetchWcMatches);
+  return {
+    teams: EMPTY_TEAM_REPORT,
     matches: {
-      api_count: apiMatches.length,
-      inserted: matchesInserted,
-      updated: matchesUpdated,
-      skipped: matchesSkipped,
+      api_count: r.apiCount,
+      inserted: 0,
+      updated: r.updated,
+      skipped: r.unmatched.map((u) => ({
+        api_id: u.api_id,
+        reason: `no DB match for ${u.home} vs ${u.away} on that date`,
+      })),
     },
   };
 }
 
-// 1 API call. Writes live in-play scores too — UI uses `status` to render the
-// LIVE badge and skip awarding points until FINISHED/AWARDED.
+// "Sync results only" button — uses thesportsdb's /eventsday endpoint which
+// returns just today's events. Cheaper, runs every 10 min via autoSync.
 export async function runResultsSync(): Promise<ResultsSyncReport> {
-  const apiMatches = await fetchWcMatches();
-  let updated = 0;
-  let unchanged = 0;
-  const notLinked: number[] = [];
-
-  const SCORE_STATUSES = new Set([
-    "IN_PLAY",
-    "PAUSED",
-    "EXTRA_TIME",
-    "PENALTY_SHOOTOUT",
-    "FINISHED",
-    "AWARDED",
-  ]);
-
-  for (const am of apiMatches) {
-    const rows = await sql<
-      {
-        id: number;
-        actual_score_a: number | null;
-        actual_score_b: number | null;
-        status: string | null;
-        current_minute: number | null;
-        injury_time: number | null;
-      }[]
-    >`
-      SELECT id, actual_score_a, actual_score_b, status,
-             current_minute, injury_time
-      FROM matches WHERE api_fixture_id = ${am.id} LIMIT 1
-    `;
-
-    if (rows.length === 0) {
-      notLinked.push(am.id);
-      continue;
-    }
-    const row = rows[0];
-
-    const hasScore = SCORE_STATUSES.has(am.status);
-    const scoreA = hasScore ? am.score.fullTime.home : null;
-    const scoreB = hasScore ? am.score.fullTime.away : null;
-    const isInPlay = am.status === "IN_PLAY" || am.status === "EXTRA_TIME";
-    const currentMinute = isInPlay ? am.minute ?? null : null;
-    const injuryTime = isInPlay ? am.injuryTime ?? null : null;
-
-    if (
-      row.actual_score_a === scoreA &&
-      row.actual_score_b === scoreB &&
-      row.status === am.status &&
-      row.current_minute === currentMinute &&
-      row.injury_time === injuryTime
-    ) {
-      unchanged++;
-      continue;
-    }
-    await sql`
-      UPDATE matches
-      SET actual_score_a = ${scoreA},
-          actual_score_b = ${scoreB},
-          status = ${am.status},
-          current_minute = ${currentMinute},
-          injury_time = ${injuryTime}
-      WHERE id = ${row.id}
-    `;
-    updated++;
-  }
-
+  const r = await syncScores(fetchLiveWcMatches);
   return {
-    api_count: apiMatches.length,
-    updated,
-    unchanged,
-    not_linked: notLinked,
+    api_count: r.apiCount,
+    updated: r.updated,
+    unchanged: r.unchanged,
+    not_linked: r.unmatched.map((u) => u.api_id),
   };
 }

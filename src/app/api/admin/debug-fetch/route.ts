@@ -30,18 +30,19 @@ export async function GET() {
     const dbMatches = await sql<
       {
         id: number;
-        api_fixture_id: number | null;
         status: string | null;
         actual_score_a: number | null;
         actual_score_b: number | null;
         current_minute: number | null;
+        manual_override: boolean;
         kickoff_at: Date;
         team_a_name: string | null;
         team_b_name: string | null;
       }[]
     >`
-      SELECT m.id, m.api_fixture_id, m.status, m.actual_score_a,
-             m.actual_score_b, m.current_minute, m.kickoff_at,
+      SELECT m.id, m.status, m.actual_score_a,
+             m.actual_score_b, m.current_minute, m.manual_override,
+             m.kickoff_at,
              ta.name AS team_a_name, tb.name AS team_b_name
       FROM matches m
       LEFT JOIN teams ta ON ta.id = m.team_a_id

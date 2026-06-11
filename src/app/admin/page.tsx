@@ -64,11 +64,11 @@ export default async function AdminPage() {
           Admin <span className="text-secondary">Control</span>
         </h1>
         <p className="text-on-background-variant">
-          Enter results, add knockout matches, lock in final standings.
+          Enter results, add knockout matches, lock in final standings. [http://localhost:3000/api/admin/debug-fetch]
         </p>
       </header>
 
-      <Section title="Sync from football-data.org">
+      <Section title="Sync from api-football">
         <AdminSync syncState={syncState} />
       </Section>
 

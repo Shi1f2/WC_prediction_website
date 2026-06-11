@@ -1,14 +1,26 @@
-// Thin wrapper around football-data.org v4. Server-only — never import from a
-// client component. Free tier is 10 req/min; we surface the throttle headers
-// so callers can show meaningful errors instead of opaque 429s.
+// Thin wrapper around thesportsdb.com v1. Server-only — never import from a
+// client component. Public test key "3" works without signup; users on
+// Patreon ($9/mo) can supply their own dedicated key via SPORTSDB_KEY.
+//
+// The class, function, and ApiMatch/ApiTeam type names are preserved from
+// the previous provider integrations so the rest of the codebase (sync.ts,
+// the admin debug endpoint, etc.) doesn't need to care which API is behind
+// the lib. Reads strange — sportsdb data passed around as `ApiTeam` /
+// `ApiMatch` / `FootballDataError` — but the alternative is a wider rename.
 
-const BASE = "https://api.football-data.org/v4";
-const WC_CODE = "WC";
+const BASE = "https://www.thesportsdb.com/api/v1/json";
+
+const SPORTSDB_KEY = process.env.SPORTSDB_KEY ?? "3";
+// 4429 = FIFA World Cup on thesportsdb. Configurable in case they renumber.
+const LEAGUE_ID = Number(process.env.SPORTSDB_LEAGUE_ID ?? 4429);
+const SEASON = process.env.SPORTSDB_SEASON ?? "2026";
 
 export type ApiTeam = {
   id: number;
   name: string;
   shortName: string | null;
+  // "tla" maps to thesportsdb's strTeamShort (3-letter code) for parity with
+  // the old football-data shape that downstream code (flag inference) expects.
   tla: string | null;
   crest: string | null;
 };
@@ -29,9 +41,6 @@ export type ApiMatch = {
     | "CANCELLED"
     | "AWARDED";
   matchday: number | null;
-  // Present on in-play matches: the actual game clock minute (e.g. 38) and
-  // stoppage-time minutes added on top. Both are missing on scheduled and
-  // finished matches.
   minute?: number | null;
   injuryTime?: number | null;
   stage:
@@ -63,75 +72,253 @@ export class FootballDataError extends Error {
   }
 }
 
-async function fdFetch<T>(path: string): Promise<T> {
-  const token = process.env.FOOTBALL_DATA_TOKEN;
-  if (!token)
-    throw new FootballDataError("FOOTBALL_DATA_TOKEN not set", 500);
+type SportsdbEvent = {
+  idEvent: string;
+  idLeague: string | null;
+  strEvent: string | null;
+  strSeason: string | null;
+  strHomeTeam: string | null;
+  strAwayTeam: string | null;
+  idHomeTeam: string | null;
+  idAwayTeam: string | null;
+  intHomeScore: string | null;
+  intAwayScore: string | null;
+  strStatus: string | null;
+  strProgress: string | null;
+  strTimestamp: string | null;
+  dateEvent: string | null;
+  strTime: string | null;
+  intRound: string | null;
+  strRound: string | null;
+  strGroup: string | null;
+};
 
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "X-Auth-Token": token },
+async function sdbFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}/${SPORTSDB_KEY}${path}`, {
     cache: "no-store",
   });
-
   if (res.status === 429) {
-    const reset = Number(res.headers.get("X-RequestCounter-Reset") ?? "60");
     throw new FootballDataError(
-      `Rate limited by football-data.org. Try again in ${reset}s.`,
+      "Rate limited by thesportsdb. Back off and try again.",
       429,
-      reset,
+      60,
     );
   }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new FootballDataError(
-      `football-data.org ${res.status}: ${body.slice(0, 200)}`,
+      `thesportsdb ${res.status}: ${body.slice(0, 200)}`,
       res.status,
     );
   }
   return (await res.json()) as T;
 }
 
+// thesportsdb status code → the long-form status the rest of the app uses.
+function mapStatus(s: string | null): ApiMatch["status"] {
+  if (!s) return "TIMED";
+  const t = s.toUpperCase();
+  switch (t) {
+    case "NS":
+      return "TIMED";
+    case "1H":
+    case "2H":
+    case "LIVE":
+      return "IN_PLAY";
+    case "HT":
+      return "PAUSED";
+    case "ET":
+      return "EXTRA_TIME";
+    case "PEN":
+    case "PSO":
+      return "PENALTY_SHOOTOUT";
+    case "FT":
+    case "AET":
+    case "AP":
+      return "FINISHED";
+    case "POSTP":
+    case "POSTPONED":
+      return "POSTPONED";
+    case "CANC":
+    case "CANCELLED":
+      return "CANCELLED";
+    case "ABD":
+    case "SUSP":
+      return "SUSPENDED";
+    case "AWD":
+    case "WO":
+      return "AWARDED";
+    default:
+      return "SCHEDULED";
+  }
+}
+
+function mapRoundToStage(round: string | null): ApiMatch["stage"] {
+  if (!round) return "GROUP_STAGE";
+  const r = round.toLowerCase();
+  if (r.includes("final") && !r.includes("semi") && !r.includes("quarter") && !r.includes("3rd"))
+    return "FINAL";
+  if (r.includes("3rd") || r.includes("third"))
+    return "THIRD_PLACE";
+  if (r.includes("semi"))
+    return "SEMI_FINALS";
+  if (r.includes("quarter"))
+    return "QUARTER_FINALS";
+  if (r.includes("16"))
+    return "LAST_16";
+  if (r.includes("32"))
+    return "LAST_32";
+  return "GROUP_STAGE";
+}
+
+// thesportsdb sometimes embeds the minute in strProgress (e.g. "45'" or
+// "45+2"). Free-tier events usually leave it null though.
+function parseMinute(progress: string | null): {
+  minute: number | null;
+  injury: number | null;
+} {
+  if (!progress) return { minute: null, injury: null };
+  const m = progress.match(/^(\d{1,3})(?:\s*\+\s*(\d{1,2}))?/);
+  if (!m) return { minute: null, injury: null };
+  return {
+    minute: Number(m[1]),
+    injury: m[2] ? Number(m[2]) : null,
+  };
+}
+
+function utcDateOf(ev: SportsdbEvent): string {
+  // strTimestamp is "2026-06-11T19:00:00+00:00" when present.
+  if (ev.strTimestamp) return ev.strTimestamp;
+  const d = ev.dateEvent ?? "1970-01-01";
+  const t = ev.strTime ?? "00:00:00";
+  return `${d}T${t}Z`;
+}
+
+function toApiMatch(ev: SportsdbEvent): ApiMatch {
+  const stage = mapRoundToStage(ev.strRound ?? ev.intRound);
+  const home = ev.intHomeScore == null ? null : Number(ev.intHomeScore);
+  const away = ev.intAwayScore == null ? null : Number(ev.intAwayScore);
+  const { minute, injury } = parseMinute(ev.strProgress);
+  return {
+    id: Number(ev.idEvent),
+    utcDate: utcDateOf(ev),
+    status: mapStatus(ev.strStatus),
+    matchday: ev.intRound ? Number(ev.intRound) : null,
+    minute,
+    injuryTime: injury,
+    stage,
+    group: ev.strGroup ?? null,
+    homeTeam: {
+      id: ev.idHomeTeam ? Number(ev.idHomeTeam) : null,
+      name: ev.strHomeTeam,
+      tla: null,
+    },
+    awayTeam: {
+      id: ev.idAwayTeam ? Number(ev.idAwayTeam) : null,
+      name: ev.strAwayTeam,
+      tla: null,
+    },
+    score: {
+      winner: null,
+      duration: "REGULAR",
+      fullTime: { home, away },
+      halfTime: { home: null, away: null },
+    },
+  };
+}
+
+// thesportsdb's /lookup_all_teams.php endpoint returns wrong data for
+// international tournaments — for league 4429 it serves English lower-
+// division clubs (Wigan, Blackpool, etc.), nothing related to the WC.
+// We derive the team list from /eventsseason.php events instead, where the
+// home/away team IDs ARE the real qualifying nations.
+//
+// Exposed separately so runFixturesSync can still call fetchWcTeams() +
+// fetchWcMatches() back-to-back without changing its shape, but both end
+// up hitting the same single endpoint behind the scenes.
+let cachedSeasonEvents: { at: number; events: SportsdbEvent[] } | null = null;
+const SEASON_CACHE_MS = 30_000;
+
+async function getSeasonEvents(): Promise<SportsdbEvent[]> {
+  if (cachedSeasonEvents && Date.now() - cachedSeasonEvents.at < SEASON_CACHE_MS) {
+    return cachedSeasonEvents.events;
+  }
+  const json = await sdbFetch<{ events: SportsdbEvent[] | null }>(
+    `/eventsseason.php?id=${LEAGUE_ID}&s=${SEASON}`,
+  );
+  const events = json.events ?? [];
+  cachedSeasonEvents = { at: Date.now(), events };
+  return events;
+}
+
 export async function fetchWcTeams(): Promise<ApiTeam[]> {
-  const data = await fdFetch<{ teams: ApiTeam[] }>(
-    `/competitions/${WC_CODE}/teams`,
-  );
-  return data.teams ?? [];
+  const events = await getSeasonEvents();
+  const seen = new Map<number, ApiTeam>();
+  for (const ev of events) {
+    for (const side of [
+      { id: ev.idHomeTeam, name: ev.strHomeTeam },
+      { id: ev.idAwayTeam, name: ev.strAwayTeam },
+    ]) {
+      if (!side.id || !side.name) continue;
+      const id = Number(side.id);
+      if (seen.has(id)) continue;
+      seen.set(id, {
+        id,
+        name: side.name,
+        shortName: side.name,
+        tla: null,
+        crest: null,
+      });
+    }
+  }
+  return Array.from(seen.values());
 }
 
-// dateFrom/dateTo are required — the no-filter call returns 0 results for WC.
 export async function fetchWcMatches(
-  opts: { dateFrom?: string; dateTo?: string } = {},
+  _opts: { dateFrom?: string; dateTo?: string } = {},
 ): Promise<ApiMatch[]> {
-  const from = opts.dateFrom ?? "2026-06-01";
-  const to = opts.dateTo ?? "2026-07-31";
-  const data = await fdFetch<{ matches: ApiMatch[] }>(
-    `/competitions/${WC_CODE}/matches?dateFrom=${from}&dateTo=${to}`,
-  );
-  return data.matches ?? [];
+  const events = await getSeasonEvents();
+  return events.map(toApiMatch);
 }
 
-const STAGE_MAP: Record<ApiMatch["stage"], string> = {
-  GROUP_STAGE: "group",
-  LAST_32: "r32",
-  LAST_16: "r16",
-  QUARTER_FINALS: "qf",
-  SEMI_FINALS: "sf",
-  THIRD_PLACE: "third",
-  FINAL: "final",
-};
+// Live-only polling: refresh just today's events instead of refetching all
+// 104 fixtures. Used by the results sync during the live window.
+//
+// thesportsdb's /eventsday.php?l=… parameter is fragile — passing the league
+// name string (even URL-encoded) returns "Invalid League ID passed". Filtering
+// by sport (s=Soccer) and then narrowing to our league ID client-side is the
+// reliable path. Day-of-soccer is a small response (a few dozen events at
+// most), so the extra filter is cheap.
+export async function fetchLiveWcMatches(): Promise<ApiMatch[]> {
+  const today = new Date().toISOString().slice(0, 10);
+  const json = await sdbFetch<{ events: SportsdbEvent[] | null }>(
+    `/eventsday.php?d=${today}&s=Soccer`,
+  );
+  const events = json.events ?? [];
+  return events
+    .filter((e) => Number(e.idLeague) === LEAGUE_ID)
+    .map(toApiMatch);
+}
+
+export function mapGroupLetter(group: string | null): string | null {
+  if (!group) return null;
+  const m = group.match(/([A-L])$/i);
+  return m ? m[1].toUpperCase() : null;
+}
 
 export function mapStage(apiStage: ApiMatch["stage"]): string {
-  return STAGE_MAP[apiStage];
+  const m: Record<ApiMatch["stage"], string> = {
+    GROUP_STAGE: "group",
+    LAST_32: "r32",
+    LAST_16: "r16",
+    QUARTER_FINALS: "qf",
+    SEMI_FINALS: "sf",
+    THIRD_PLACE: "third",
+    FINAL: "final",
+  };
+  return m[apiStage];
 }
 
-export function mapGroupLetter(apiGroup: string | null): string | null {
-  if (!apiGroup) return null;
-  const m = apiGroup.match(/^GROUP_([A-L])$/);
-  return m ? m[1] : null;
-}
-
-// Strip accents, lowercase, collapse punctuation, drop common prefixes so
-// "Côte d'Ivoire" and "Cote dIvoire" hash the same.
 export function normalizeTeamName(s: string): string {
   return s
     .normalize("NFD")
@@ -142,7 +329,6 @@ export function normalizeTeamName(s: string): string {
     .trim();
 }
 
-// Known aliases between the API and our seed. Extend as needed.
 const NAME_ALIASES: Record<string, string[]> = {
   "united states": ["usa", "us", "united states of america"],
   "south korea": ["korea republic", "republic of korea", "korea south"],

@@ -23,7 +23,7 @@ export const MARKETS: MarketDef[] = [
     short: "O/U 1.5",
     options: [
       { value: "over", label: "Over 1.5", points: 3 },
-      { value: "under", label: "Under 1.5", points: 3 },
+      { value: "under", label: "Under 1.5", points: 6 },
     ],
   },
   {
@@ -41,7 +41,7 @@ export const MARKETS: MarketDef[] = [
     short: "O/U 3.5",
     options: [
       { value: "over", label: "Over 3.5", points: 6 },
-      { value: "under", label: "Under 3.5", points: 6 },
+      { value: "under", label: "Under 3.5", points: 3 },
     ],
   },
   {

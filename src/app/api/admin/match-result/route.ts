@@ -18,10 +18,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   if (b !== null && (!Number.isInteger(b) || b < 0 || b > 30))
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
+  // Setting an explicit score asserts manual control — the football-data.org
+  // sync must leave this row alone afterward. Clearing both back to null
+  // releases the row so the sync owns it again.
+  const manualOverride = a !== null || b !== null;
   await sql`
     UPDATE matches
-    SET actual_score_a = ${a}, actual_score_b = ${b}
+    SET actual_score_a = ${a},
+        actual_score_b = ${b},
+        manual_override = ${manualOverride}
     WHERE id = ${matchId}
   `;
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, manual_override: manualOverride });
 }

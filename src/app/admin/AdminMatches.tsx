@@ -31,6 +31,7 @@ export default function AdminMatches({ matches }: { matches: M[] }) {
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="w-full rounded-lg border border-outline-variant/40 bg-surface-low px-3 py-2 text-sm focus:border-secondary focus:outline-none"
+        suppressHydrationWarning
       />
       <div className="space-y-1.5">
         {filtered.map((m) => (
@@ -90,6 +91,7 @@ function Row({ m }: { m: M }) {
           value={a}
           onChange={(e) => setA(e.target.value)}
           className="h-9 w-12 rounded border border-outline-variant/40 bg-surface-low text-center font-bold focus:border-secondary focus:outline-none"
+          suppressHydrationWarning
         />
         <span className="text-secondary">–</span>
         <input
@@ -99,6 +101,7 @@ function Row({ m }: { m: M }) {
           value={b}
           onChange={(e) => setB(e.target.value)}
           className="h-9 w-12 rounded border border-outline-variant/40 bg-surface-low text-center font-bold focus:border-secondary focus:outline-none"
+          suppressHydrationWarning
         />
       </div>
       <div className="flex items-center gap-2">
@@ -108,6 +111,7 @@ function Row({ m }: { m: M }) {
           onClick={save}
           disabled={pending}
           className="rounded-full bg-secondary px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-on-secondary hover:brightness-110 disabled:opacity-40"
+          suppressHydrationWarning
         >
           Save
         </button>
