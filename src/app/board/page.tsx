@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import BoardClient from "@/components/BoardClient";
 import { autoSyncForPage } from "@/lib/autoSync";
+import { effectiveLockAtMs } from "@/lib/boardLock";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export default async function BoardPage() {
   const committedRows = await sql<{ bracket_committed_at: Date | null }[]>`
     SELECT bracket_committed_at FROM users WHERE id = ${user.id}
   `;
-  const bracketCommittedAt =
+  const rawCommittedAt =
     committedRows[0]?.bracket_committed_at?.toISOString() ?? null;
 
   await autoSyncForPage();
@@ -31,6 +32,13 @@ export default async function BoardPage() {
   const bracketPreds = await sql<{ stage: string; team_id: number }[]>`
     SELECT stage, team_id FROM bracket_predictions WHERE user_id = ${user.id}
   `;
+  // Treat the user as committed only when the flag AND the actual prediction
+  // rows exist. Protects against inconsistent state (e.g. rows deleted
+  // directly in the DB) leaving the UI permanently locked.
+  const bracketCommittedAt =
+    rawCommittedAt && (groupPreds.length > 0 || bracketPreds.length > 0)
+      ? rawCommittedAt
+      : null;
   const firstKickoff = await sql<
     { kickoff_at: Date; group_letter: string }[]
   >`
@@ -43,14 +51,17 @@ export default async function BoardPage() {
   `;
 
   const lockMap = new Map(
-    firstKickoff.map((r) => [r.group_letter, new Date(r.kickoff_at).getTime()])
+    firstKickoff.map((r) => [
+      r.group_letter,
+      effectiveLockAtMs(new Date(r.kickoff_at).getTime())!,
+    ])
+  );
+  const bracketLockAtMs = effectiveLockAtMs(
+    firstKnockout.length > 0 ? new Date(firstKnockout[0].kickoff_at).getTime() : null
   );
   const bracketLockAt =
-    firstKnockout.length > 0
-      ? new Date(firstKnockout[0].kickoff_at).toISOString()
-      : null;
-  const bracketLocked =
-    bracketLockAt != null && new Date(bracketLockAt).getTime() <= Date.now();
+    bracketLockAtMs != null ? new Date(bracketLockAtMs).toISOString() : null;
+  const bracketLocked = bracketLockAtMs != null && bracketLockAtMs <= Date.now();
 
   type T = (typeof teams)[number];
   const groupMap = new Map<string, T[]>();

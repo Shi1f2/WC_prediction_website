@@ -29,6 +29,11 @@ export type ApiMatch = {
     | "CANCELLED"
     | "AWARDED";
   matchday: number | null;
+  // Present on in-play matches: the actual game clock minute (e.g. 38) and
+  // stoppage-time minutes added on top. Both are missing on scheduled and
+  // finished matches.
+  minute?: number | null;
+  injuryTime?: number | null;
   stage:
     | "GROUP_STAGE"
     | "LAST_32"

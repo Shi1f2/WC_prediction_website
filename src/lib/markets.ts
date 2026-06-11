@@ -54,11 +54,20 @@ export const MARKETS: MarketDef[] = [
     ],
   },
   {
+    id: "winner",
+    label: "Match winner",
+    short: "Winner",
+    options: [
+      { value: "a", label: "A wins", points: 3 },
+      { value: "draw", label: "Draw", points: 4 },
+      { value: "b", label: "B wins", points: 3 },
+    ],
+  },
+  {
     id: "margin",
     label: "Winning margin",
     short: "Margin",
     options: [
-      { value: "draw", label: "Draw", points: 5 },
       { value: "a_by_1", label: "A by 1", points: 6 },
       { value: "a_by_2", label: "A by 2", points: 8 },
       { value: "a_by_3plus", label: "A by 3+", points: 10 },
@@ -96,6 +105,11 @@ export function correctPick(
       return total > 3.5 ? "over" : "under";
     case "btts":
       return scoreA > 0 && scoreB > 0 ? "yes" : "no";
+    case "winner": {
+      const diff = scoreA - scoreB;
+      if (diff === 0) return "draw";
+      return diff > 0 ? "a" : "b";
+    }
     case "margin": {
       const diff = scoreA - scoreB;
       if (diff === 0) return "draw";

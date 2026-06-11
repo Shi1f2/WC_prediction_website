@@ -24,6 +24,8 @@ type MatchRowDb = {
   actual_score_a: number | null;
   actual_score_b: number | null;
   status: string | null;
+  current_minute: number | null;
+  injury_time: number | null;
   pred_a: number | null;
   pred_b: number | null;
 };
@@ -44,6 +46,7 @@ export default async function MatchesPage() {
       tb.name AS team_b_name, tb.flag AS team_b_flag, m.team_b_label,
       to_char(m.kickoff_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS kickoff_at,
       m.actual_score_a, m.actual_score_b, m.status,
+      m.current_minute, m.injury_time,
       mp.score_a AS pred_a, mp.score_b AS pred_b
     FROM matches m
     LEFT JOIN teams ta ON ta.id = m.team_a_id

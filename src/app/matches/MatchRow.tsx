@@ -21,6 +21,8 @@ type Match = {
   actual_score_a: number | null;
   actual_score_b: number | null;
   status: string | null;
+  current_minute: number | null;
+  injury_time: number | null;
   pred_a: number | null;
   pred_b: number | null;
 };
@@ -54,17 +56,28 @@ function formatCountdown(ms: number): string {
   return `${h}h ${m}m`;
 }
 
-// Approximate match clock from kickoff. Football matches have a ~15-min break
-// between halves; we offset for that. Returns null if not in a live status.
+// Prefer the real game-clock minute synced from football-data.org. Only fall
+// back to wall-clock elapsed when the API hasn't given us one — that estimate
+// drifts on late kickoffs and stoppages, so it's a last resort.
 function liveMinute(
   status: string | null,
+  apiMinute: number | null,
+  injuryTime: number | null,
   kickoffMs: number,
   nowMs: number,
 ): string | null {
   if (status === "PAUSED") return "HT";
   if (status === "PENALTY_SHOOTOUT") return "PENS";
-  if (status === "EXTRA_TIME") return "ET";
+  if (status === "EXTRA_TIME") {
+    if (apiMinute != null) {
+      return injuryTime ? `${apiMinute}'+${injuryTime}` : `${apiMinute}'`;
+    }
+    return "ET";
+  }
   if (status !== "IN_PLAY") return null;
+  if (apiMinute != null) {
+    return injuryTime ? `${apiMinute}'+${injuryTime}` : `${apiMinute}'`;
+  }
   const elapsed = Math.floor((nowMs - kickoffMs) / 60_000);
   if (elapsed < 1) return "1'";
   if (elapsed <= 45) return `${elapsed}'`;
@@ -118,12 +131,25 @@ export default function MatchRow({
   const locked = msUntil <= 0;
   const notOpenYet = msUntil > OPEN_WINDOW_MS;
   const isLive = match.status != null && LIVE_STATUSES.has(match.status);
-  const isFinal =
-    (match.status != null && FINAL_STATUSES.has(match.status)) ||
-    // Fallback for matches that have a score but no synced status yet.
-    (match.actual_score_a != null && match.actual_score_b != null);
   const hasScore =
     match.actual_score_a != null && match.actual_score_b != null;
+  const isFinal =
+    (match.status != null && FINAL_STATUSES.has(match.status)) ||
+    // Fallback for matches that have a score but no synced status at all.
+    // A live status (IN_PLAY/PAUSED/…) must NOT be promoted to "Final" just
+    // because there's a score — that's the normal in-play state.
+    (match.status == null && hasScore);
+
+  // Once kickoff has passed but the match isn't final yet, the server-side
+  // autoSync needs a page render to pull the latest score/status. Without a
+  // client-side nudge the card freezes on whatever was true at page load and
+  // the user never sees live updates. Refresh every 60s until the match
+  // finishes — router.refresh() is a no-op when the data is unchanged.
+  useEffect(() => {
+    if (!locked || isFinal) return;
+    const id = setInterval(() => router.refresh(), 60_000);
+    return () => clearInterval(id);
+  }, [locked, isFinal, router]);
   const hasPrediction = match.pred_a != null && match.pred_b != null;
 
   const earnedPoints =
@@ -253,7 +279,7 @@ export default function MatchRow({
       tone: "final",
     };
   } else if (isLive) {
-    const minute = liveMinute(match.status, kickoff, now);
+    const minute = liveMinute(match.status, match.current_minute, match.injury_time, kickoff, now);
     badge = { text: minute ? `Live · ${minute}` : "Live", tone: "live" };
   } else if (locked) {
     badge = { text: "Locked", tone: "locked" };
@@ -317,31 +343,74 @@ export default function MatchRow({
           <span className="truncate text-sm font-bold uppercase">{teamA}</span>
           {match.team_a_flag ? <Flag code={match.team_a_flag} size="md" /> : null}
         </div>
-        <div className="flex items-center gap-1.5">
-          <input
-            type="number"
-            min={0}
-            max={20}
-            value={a}
-            disabled={inputsDisabled}
-            onChange={(e) => setA(e.target.value)}
-            placeholder="–"
-            className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
-            suppressHydrationWarning
-          />
-          <span className="mono text-secondary">–</span>
-          <input
-            type="number"
-            min={0}
-            max={20}
-            value={b}
-            disabled={inputsDisabled}
-            onChange={(e) => setB(e.target.value)}
-            placeholder="–"
-            className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
-            suppressHydrationWarning
-          />
-        </div>
+        {locked && hasScore ? (
+          <div className="flex flex-col items-center gap-1">
+            <span
+              className={`mono inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${
+                isFinal ? "text-primary" : "text-error"
+              }`}
+            >
+              {!isFinal && (
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-error" />
+              )}
+              {isFinal
+                ? "Full time"
+                : liveMinute(match.status, match.current_minute, match.injury_time, kickoff, now) ?? "Live"}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <div
+                className={`mono flex h-11 w-12 items-center justify-center rounded-lg border text-lg font-bold ${
+                  isFinal
+                    ? "border-primary/40 bg-primary/10 text-on-surface"
+                    : "border-error/40 bg-error/10 text-on-surface"
+                }`}
+              >
+                {match.actual_score_a}
+              </div>
+              <span className="mono text-secondary">–</span>
+              <div
+                className={`mono flex h-11 w-12 items-center justify-center rounded-lg border text-lg font-bold ${
+                  isFinal
+                    ? "border-primary/40 bg-primary/10 text-on-surface"
+                    : "border-error/40 bg-error/10 text-on-surface"
+                }`}
+              >
+                {match.actual_score_b}
+              </div>
+            </div>
+            {hasPrediction && (
+              <span className="mono text-[9px] uppercase tracking-wider text-on-surface-variant">
+                your pick {match.pred_a}–{match.pred_b}
+              </span>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <input
+              type="number"
+              min={0}
+              max={20}
+              value={a}
+              disabled={inputsDisabled}
+              onChange={(e) => setA(e.target.value)}
+              placeholder="–"
+              className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
+              suppressHydrationWarning
+            />
+            <span className="mono text-secondary">–</span>
+            <input
+              type="number"
+              min={0}
+              max={20}
+              value={b}
+              disabled={inputsDisabled}
+              onChange={(e) => setB(e.target.value)}
+              placeholder="–"
+              className="mono h-11 w-12 rounded-lg border border-outline-variant/40 bg-surface-low text-center text-lg font-bold focus:border-secondary focus:outline-none disabled:opacity-60"
+              suppressHydrationWarning
+            />
+          </div>
+        )}
         <div className="flex items-center gap-2 truncate">
           {match.team_b_flag ? <Flag code={match.team_b_flag} size="md" /> : null}
           <span className="truncate text-sm font-bold uppercase">{teamB}</span>
@@ -448,7 +517,7 @@ export default function MatchRow({
             </div>
             <div className="mono text-left text-xs uppercase tracking-wider text-on-surface-variant">
               {isLive
-                ? liveMinute(match.status, kickoff, now) ?? "in play"
+                ? liveMinute(match.status, match.current_minute, match.injury_time, kickoff, now) ?? "in play"
                 : "full time"}
             </div>
             {hasPrediction ? (

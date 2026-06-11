@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { sql } from "@/lib/db";
+import { effectiveLockAtMs } from "@/lib/boardLock";
 
 const LIMITS: Record<string, number> = { R16: 16, QF: 8, SF: 4, FINAL: 2, WINNER: 1 };
 
@@ -18,8 +19,11 @@ export async function POST(req: Request) {
     SELECT kickoff_at FROM matches
     WHERE stage IN ('r32', 'r16') ORDER BY kickoff_at ASC LIMIT 1
   `;
-  if (lockRows.length && new Date(lockRows[0].kickoff_at).getTime() <= Date.now())
-    return NextResponse.json({ error: "Locked" }, { status: 403 });
+  if (lockRows.length) {
+    const lockMs = effectiveLockAtMs(new Date(lockRows[0].kickoff_at).getTime());
+    if (lockMs != null && lockMs <= Date.now())
+      return NextResponse.json({ error: "Locked" }, { status: 403 });
+  }
 
   // Also reject changes if the user has personally committed their bracket.
   const committed = await sql<{ bracket_committed_at: Date | null }[]>`

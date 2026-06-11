@@ -177,6 +177,12 @@ export async function runFixturesSync(): Promise<FixturesSyncReport> {
       am.status === "PENALTY_SHOOTOUT";
     const scoreA = liveOrDone ? am.score.fullTime.home : null;
     const scoreB = liveOrDone ? am.score.fullTime.away : null;
+    // Only meaningful during in-play; the API omits it (or nulls it) once
+    // the match is paused/finished. Clear it in those cases so a stale
+    // minute can't survive past kickoff.
+    const isInPlay = am.status === "IN_PLAY" || am.status === "EXTRA_TIME";
+    const currentMinute = isInPlay ? am.minute ?? null : null;
+    const injuryTime = isInPlay ? am.injuryTime ?? null : null;
 
     if (groupLetter) {
       if (homeId) {
@@ -207,7 +213,9 @@ export async function runFixturesSync(): Promise<FixturesSyncReport> {
           kickoff_at = ${am.utcDate},
           actual_score_a = ${scoreA},
           actual_score_b = ${scoreB},
-          status = ${am.status}
+          status = ${am.status},
+          current_minute = ${currentMinute},
+          injury_time = ${injuryTime}
         WHERE id = ${existing[0].id}
       `;
       matchesUpdated++;
@@ -222,10 +230,12 @@ export async function runFixturesSync(): Promise<FixturesSyncReport> {
       await sql`
         INSERT INTO matches
           (stage, group_letter, team_a_id, team_b_id, kickoff_at,
-           actual_score_a, actual_score_b, api_fixture_id, status)
+           actual_score_a, actual_score_b, api_fixture_id, status,
+           current_minute, injury_time)
         VALUES
           (${stage}, ${groupLetter}, ${homeId ?? null}, ${awayId ?? null},
-           ${am.utcDate}, ${scoreA}, ${scoreB}, ${am.id}, ${am.status})
+           ${am.utcDate}, ${scoreA}, ${scoreB}, ${am.id}, ${am.status},
+           ${currentMinute}, ${injuryTime})
       `;
       matchesInserted++;
     }
@@ -266,9 +276,12 @@ export async function runResultsSync(): Promise<ResultsSyncReport> {
         actual_score_a: number | null;
         actual_score_b: number | null;
         status: string | null;
+        current_minute: number | null;
+        injury_time: number | null;
       }[]
     >`
-      SELECT id, actual_score_a, actual_score_b, status
+      SELECT id, actual_score_a, actual_score_b, status,
+             current_minute, injury_time
       FROM matches WHERE api_fixture_id = ${am.id} LIMIT 1
     `;
 
@@ -281,11 +294,16 @@ export async function runResultsSync(): Promise<ResultsSyncReport> {
     const hasScore = SCORE_STATUSES.has(am.status);
     const scoreA = hasScore ? am.score.fullTime.home : null;
     const scoreB = hasScore ? am.score.fullTime.away : null;
+    const isInPlay = am.status === "IN_PLAY" || am.status === "EXTRA_TIME";
+    const currentMinute = isInPlay ? am.minute ?? null : null;
+    const injuryTime = isInPlay ? am.injuryTime ?? null : null;
 
     if (
       row.actual_score_a === scoreA &&
       row.actual_score_b === scoreB &&
-      row.status === am.status
+      row.status === am.status &&
+      row.current_minute === currentMinute &&
+      row.injury_time === injuryTime
     ) {
       unchanged++;
       continue;
@@ -294,7 +312,9 @@ export async function runResultsSync(): Promise<ResultsSyncReport> {
       UPDATE matches
       SET actual_score_a = ${scoreA},
           actual_score_b = ${scoreB},
-          status = ${am.status}
+          status = ${am.status},
+          current_minute = ${currentMinute},
+          injury_time = ${injuryTime}
       WHERE id = ${row.id}
     `;
     updated++;

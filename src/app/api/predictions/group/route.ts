@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { sql } from "@/lib/db";
+import { effectiveLockAtMs } from "@/lib/boardLock";
 
 export async function POST(req: Request) {
   let user;
@@ -35,8 +36,11 @@ export async function POST(req: Request) {
     WHERE stage = 'group' AND group_letter = ${letter}
     ORDER BY kickoff_at ASC LIMIT 1
   `;
-  if (lockRows.length && new Date(lockRows[0].kickoff_at).getTime() <= Date.now())
-    return NextResponse.json({ error: "Locked" }, { status: 403 });
+  if (lockRows.length) {
+    const lockMs = effectiveLockAtMs(new Date(lockRows[0].kickoff_at).getTime());
+    if (lockMs != null && lockMs <= Date.now())
+      return NextResponse.json({ error: "Locked" }, { status: 403 });
+  }
 
   const pickedIds = [...new Set(
     Object.values(positions).filter((x): x is number => x != null)

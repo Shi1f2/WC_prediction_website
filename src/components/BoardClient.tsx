@@ -51,13 +51,32 @@ export default function BoardClient({
   );
   const [hydrated, setHydrated] = useState(false);
 
-  // Hydrate from localStorage on mount so drafts survive reloads. We also
-  // hydrate AFTER lock-in so the user keeps seeing their committed picks.
-  // If localStorage is empty but the user has already committed (e.g. their
-  // browser was cleared, or they're on a different device), we reconstruct
-  // the positional bracket from the set-based DB record.
+  // DB is the source of truth. localStorage is a transient buffer that only
+  // helps when the server already has picks for this user — e.g. preserving
+  // unsaved edits made since the last save. If the DB returned no picks (new
+  // user, or admin reset), we ignore localStorage and clear it so stale state
+  // can't mask the empty DB.
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const dbHasGroupPicks = Object.values(initialGroupPicks).some((arr) =>
+      arr.some((x) => x != null)
+    );
+    const dbHasBracketPicks = Object.values(initialBracket).some(
+      (arr) => arr.length > 0
+    );
+    const dbHasData = dbHasGroupPicks || dbHasBracketPicks || !!bracketCommittedAt;
+
+    if (!dbHasData) {
+      try {
+        window.localStorage.removeItem(storageKey);
+      } catch {
+        // ignore
+      }
+      setHydrated(true);
+      return;
+    }
+
     let localHasPicks = false;
     try {
       const raw = window.localStorage.getItem(storageKey);
