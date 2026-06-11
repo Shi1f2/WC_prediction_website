@@ -33,6 +33,8 @@ export default function DemoDay() {
             actual_score_a: null,
             actual_score_b: null,
             status: null,
+            current_minute: null,
+            injury_time: null,
             pred_a: null,
             pred_b: null,
           }}
@@ -56,6 +58,8 @@ export default function DemoDay() {
             actual_score_a: null,
             actual_score_b: null,
             status: null,
+            current_minute: null,
+            injury_time: null,
             pred_a: 2,
             pred_b: 1,
           }}
@@ -84,6 +88,8 @@ export default function DemoDay() {
             actual_score_a: 1,
             actual_score_b: 1,
             status: "IN_PLAY",
+            current_minute: 60,
+            injury_time: null,
             pred_a: 2,
             pred_b: 1,
           }}
@@ -113,6 +119,8 @@ export default function DemoDay() {
             actual_score_a: 2,
             actual_score_b: 1,
             status: "FINISHED",
+            current_minute: null,
+            injury_time: null,
             pred_a: 2,
             pred_b: 1,
           }}
@@ -142,6 +150,8 @@ export default function DemoDay() {
             actual_score_a: 3,
             actual_score_b: 3,
             status: "FINISHED",
+            current_minute: null,
+            injury_time: null,
             pred_a: 1,
             pred_b: 0,
           }}

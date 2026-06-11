@@ -528,6 +528,8 @@ function MatchPicksByDay({
                       actual_score_a: m.actual_score_a,
                       actual_score_b: m.actual_score_b,
                       status: m.status,
+                      current_minute: null,
+                      injury_time: null,
                       pred_a: memberPick?.score_a ?? null,
                       pred_b: memberPick?.score_b ?? null,
                     };
