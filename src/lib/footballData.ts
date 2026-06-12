@@ -281,23 +281,20 @@ export async function fetchWcMatches(
   return events.map(toApiMatch);
 }
 
-// Live-only polling: refresh just today's events instead of refetching all
-// 104 fixtures. Used by the results sync during the live window.
+// Live-only polling: re-uses the same /eventsseason.php response as
+// fetchWcMatches, going through the same 30-second cache.
 //
-// thesportsdb's /eventsday.php?l=… parameter is fragile — passing the league
-// name string (even URL-encoded) returns "Invalid League ID passed". Filtering
-// by sport (s=Soccer) and then narrowing to our league ID client-side is the
-// reliable path. Day-of-soccer is a small response (a few dozen events at
-// most), so the extra filter is cheap.
+// Originally we used /eventsday.php?d=<today>&s=Soccer to fetch only today's
+// games. That works for some WC dates (Mexico vs South Africa on 2026-06-11
+// showed up fine) but silently drops others (South Korea vs Czech Republic on
+// 2026-06-12 doesn't appear there despite dateEvent + idLeague being correct
+// — it only shows up via /eventsseason). Going through the season endpoint
+// gives us a single source of truth across all matches; the payload is small
+// (≤104 events for the whole tournament) and the cache absorbs repeated
+// calls inside one sync run.
 export async function fetchLiveWcMatches(): Promise<ApiMatch[]> {
-  const today = new Date().toISOString().slice(0, 10);
-  const json = await sdbFetch<{ events: SportsdbEvent[] | null }>(
-    `/eventsday.php?d=${today}&s=Soccer`,
-  );
-  const events = json.events ?? [];
-  return events
-    .filter((e) => Number(e.idLeague) === LEAGUE_ID)
-    .map(toApiMatch);
+  const events = await getSeasonEvents();
+  return events.map(toApiMatch);
 }
 
 export function mapGroupLetter(group: string | null): string | null {
