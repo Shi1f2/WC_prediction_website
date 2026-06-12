@@ -187,8 +187,15 @@ function parseMinute(progress: string | null): {
 }
 
 function utcDateOf(ev: SportsdbEvent): string {
-  // strTimestamp is "2026-06-11T19:00:00+00:00" when present.
-  if (ev.strTimestamp) return ev.strTimestamp;
+  // thesportsdb stores everything in UTC but strTimestamp ships WITHOUT a
+  // TZ marker (e.g. "2026-06-12T19:00:00"). If we hand that to JS Date or
+  // Postgres TIMESTAMPTZ as-is, it silently gets treated as local time,
+  // which on a UTC+1 (BST) server shifts every kickoff back an hour. Force
+  // UTC by appending Z when no offset is already present.
+  if (ev.strTimestamp) {
+    const hasTz = /(?:Z|[+-]\d{2}:?\d{2})$/.test(ev.strTimestamp);
+    return hasTz ? ev.strTimestamp : `${ev.strTimestamp}Z`;
+  }
   const d = ev.dateEvent ?? "1970-01-01";
   const t = ev.strTime ?? "00:00:00";
   return `${d}T${t}Z`;

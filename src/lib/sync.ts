@@ -1,11 +1,11 @@
-// Score-only sync.
+// Score + kickoff sync.
 //
 // We don't sync teams or insert new matches anymore — the seed file owns the
 // 48 WC team rows and the 104 fixtures, and the admin can hand-edit anything
-// else. All this module does is: pull live event scores from thesportsdb,
-// match them against existing match rows by (team-A name, team-B name, kickoff
-// date), and UPDATE the score/status/minute. Rows with manual_override = TRUE
-// are never touched.
+// else. All this module does is: pull event data from thesportsdb, match it
+// against existing match rows by (team-A name, team-B name, kickoff date),
+// and UPDATE score/status/minute AND kickoff_at if FIFA rescheduled it. Rows
+// with manual_override = TRUE are never touched.
 
 import { sql } from "@/lib/db";
 import {
@@ -95,20 +95,28 @@ async function syncScores(
     LEFT JOIN teams tb ON tb.id = m.team_b_id
   `;
 
-  // Pre-bucket DB matches by kickoff date (UTC) so each event only scans a
-  // small list. With 104 matches across ~30 days that's ~3-4 per day.
+  // Pre-bucket DB matches by kickoff date in BOTH the stored UTC day and the
+  // day ±1 so a row whose kickoff_at is stale by up to a day (e.g. FIFA moved
+  // it) can still be linked to the API event by team names. With 104 matches
+  // across ~30 days that's still ~3-4 candidates per bucket.
   const dbByDate = new Map<
     string,
     (typeof dbMatches)[number][]
   >();
-  for (const m of dbMatches) {
-    const day = m.kickoff_at.toISOString().slice(0, 10);
+  const pushBucket = (day: string, row: (typeof dbMatches)[number]) => {
     let arr = dbByDate.get(day);
     if (!arr) {
       arr = [];
       dbByDate.set(day, arr);
     }
-    arr.push(m);
+    arr.push(row);
+  };
+  for (const m of dbMatches) {
+    const ms = m.kickoff_at.getTime();
+    for (const offset of [-1, 0, 1]) {
+      const d = new Date(ms + offset * 24 * 60 * 60 * 1000);
+      pushBucket(d.toISOString().slice(0, 10), m);
+    }
   }
 
   type UpdatePlan = {
@@ -162,6 +170,7 @@ async function syncScores(
     updates.map(async (u) => {
       await sql`
         UPDATE matches SET
+          kickoff_at     = ${u.am.utcDate},
           actual_score_a = ${u.scoreA},
           actual_score_b = ${u.scoreB},
           status         = ${u.am.status},
