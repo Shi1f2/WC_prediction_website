@@ -47,12 +47,20 @@ export type AutoSyncOutcome = {
 };
 
 async function isInLiveWindow(): Promise<boolean> {
+  // "Live" = either kickoff is within the polling window, OR a match is still
+  // flagged in-play / halftime / ET / pens in the DB. The status check matters
+  // because a knockout match in extra-time + penalties can run 3h+ past
+  // kickoff, falling outside the kickoff-based window — without it, autoSync
+  // would drop to the 12h IDLE interval and freeze the score mid-match until
+  // someone manually triggered a sync.
   const rows = await sql<{ exists: boolean }[]>`
     SELECT EXISTS (
       SELECT 1 FROM matches
-      WHERE kickoff_at BETWEEN
-        now() - (${LIVE_AFTER_MS / 1000} || ' seconds')::INTERVAL
-        AND now() + (${LIVE_BEFORE_MS / 1000} || ' seconds')::INTERVAL
+      WHERE
+        status IN ('IN_PLAY','PAUSED','EXTRA_TIME','PENALTY_SHOOTOUT')
+        OR kickoff_at BETWEEN
+          now() - (${LIVE_AFTER_MS / 1000} || ' seconds')::INTERVAL
+          AND now() + (${LIVE_BEFORE_MS / 1000} || ' seconds')::INTERVAL
     ) AS exists
   `;
   return rows[0]?.exists ?? false;
